@@ -42,7 +42,7 @@
 #include <okvis/Processor.hpp>
 #if defined(OKVIS_STEREO_NETWORK_PROCESSOR) || defined(OKVIS_DFUSION_NETWORK_PROCESSOR)
   #if defined(OKVIS_STEREO_NETWORK_PROCESSOR)
-    #include <okvis/Stereo2DepthProcessor.hpp>
+    #include <okvis/StereoDepthProcessorFactory.hpp>
   #endif
   #if defined(OKVIS_DFUSION_NETWORK_PROCESSOR)
     #include <okvis/DepthFusionProcessor.hpp>
@@ -148,7 +148,8 @@ int main(int argc, char **argv) {
   // Setereo or depth fusion or vision-language fusion
   okvis::DeepLearningProcessor* dlProcessor;
   #if defined(OKVIS_STEREO_NETWORK_PROCESSOR)
-    dlProcessor = new okvis::Stereo2DepthProcessor(parameters, dBowVocDir);
+    // TensorRT depth-model.engine if present (USE_TENSORRT), else TorchScript depth-model.pt (USE_NN)
+    dlProcessor = okvis::createStereoDepthProcessor(parameters, dBowVocDir);
   #elif defined(OKVIS_DFUSION_NETWORK_PROCESSOR)
     dlProcessor = new okvis::DepthFusionProcessor(parameters, dBowVocDir);
   #elif defined(OKVIS_LANGUAGE_NETWORK_PROCESSOR)

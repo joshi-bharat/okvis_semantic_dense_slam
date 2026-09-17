@@ -21,8 +21,10 @@
 #include <okvis/ThreadedSlam.hpp>
 #include <okvis/ViInterface.hpp>
 #include <okvis/DeepLearningProcessor.hpp>
+#ifdef OKVIS_USE_NN
 #include <okvis/Stereo2DepthProcessor.hpp>
 #include <okvis/DepthFusionProcessor.hpp>
+#endif
 #include <okvis/mapTypedefs.hpp>
 
 namespace okvis {

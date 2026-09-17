@@ -26,6 +26,14 @@ option (BUILD_SHARED_LIBS
         "Whether to build okvis as a shared library" OFF)
 
 option (USE_COLIDMAP "Whether to build okvis supportin colour and object's id 'for language based OKVIS' or regular one" ON)
+option (USE_RERUN "Log the estimate to a Rerun viewer (downloads the Rerun C++ SDK and Arrow)" OFF)
+option (USE_TENSORRT "Stereo depth network via a TensorRT engine (depth-model.engine), without libtorch" OFF)
+# The viewer (pip install rerun-sdk==<version>) must match the SDK version.
+# 0.38.1 has no GitHub release asset yet; this is Rerun's C++ SDK build of the 0.38.1 release commit
+# (b08c599, the same commit as `rerun --version` of pip rerun-sdk 0.38.1). For a GitHub release use
+# https://github.com/rerun-io/rerun/releases/download/<version>/rerun_cpp_sdk.zip
+set(RERUN_SDK_URL "https://build.rerun.io/commit/b08c599/rerun_cpp_sdk.zip"
+    CACHE STRING "Rerun C++ SDK zip (0.38.1)")
 
 set(OKVIS_CXX_STANDARD 17)
 set(OKVIS_PUBLIC_CXX_FLAGS)
@@ -35,7 +43,9 @@ else()
   set(OKVIS_PRIVATE_CXX_FLAGS -Wall -Wpedantic -Wextra)
 endif()
 
-set(BLA_VENDOR Generic)
+if(NOT DEFINED BLA_VENDOR)
+  set(BLA_VENDOR OpenBLAS)
+endif()
 find_package(LAPACK REQUIRED)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -236,10 +246,17 @@ add_subdirectory(okvis_timing)
 add_subdirectory(okvis_ceres)
 add_subdirectory(okvis_frontend)
 add_subdirectory(okvis_mapping)
+if(USE_RERUN)
+  include(FetchContent)
+  FetchContent_Declare(rerun_sdk
+    URL ${RERUN_SDK_URL})
+  FetchContent_MakeAvailable(rerun_sdk)
+  message(STATUS "Rerun visualisation enabled (SDK ${RERUN_SDK_URL})")
+endif()
 add_subdirectory(okvis_multisensor_processing)
 
 # Include stereo from depth network.
-if(USE_NN)
+if(USE_NN OR USE_TENSORRT)
   add_subdirectory(okvis_deep_learning)
 endif()
 
@@ -376,30 +393,6 @@ if(BUILD_APPS)
       PUBLIC cxx_std_${OKVIS_CXX_STANDARD}
     )
     
-    # Submapping App with Stereo Depth NN
-    add_executable(okvis2x_app_snetwork_synchronous
-                   okvis_apps/src/okvis2x_app_network_synchronous.cpp)
-    target_compile_definitions(okvis2x_app_snetwork_synchronous PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR)
-    target_link_libraries(okvis2x_app_snetwork_synchronous
-      okvis_util
-      okvis_kinematics
-      okvis_time
-      okvis_cv
-      okvis_common
-      okvis_ceres
-      okvis_timing
-      okvis_frontend
-      okvis_multisensor_processing
-      okvis_deep_learning
-      okvis_mapping
-      pthread
-      ${Boost_LIBRARIES}
-      ${TORCH_LIBRARIES}
-      ${GeographicLib_LIBRARIES}
-      SRL::Supereight2
-      SRL::Projection
-    )
-
     add_executable(okvis2x_app_depthfusion_synchronous
                    okvis_apps/src/okvis2x_app_network_synchronous.cpp)
     target_compile_definitions(okvis2x_app_depthfusion_synchronous PUBLIC OKVIS_DFUSION_NETWORK_PROCESSOR)
@@ -445,6 +438,32 @@ if(BUILD_APPS)
       SRL::Projection
     )
   endif()               
+
+  if(USE_NN OR USE_TENSORRT)
+    # Submapping App with Stereo Depth NN
+    add_executable(okvis2x_app_snetwork_synchronous
+                   okvis_apps/src/okvis2x_app_network_synchronous.cpp)
+    target_compile_definitions(okvis2x_app_snetwork_synchronous PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR)
+    target_link_libraries(okvis2x_app_snetwork_synchronous
+      okvis_util
+      okvis_kinematics
+      okvis_time
+      okvis_cv
+      okvis_common
+      okvis_ceres
+      okvis_timing
+      okvis_frontend
+      okvis_multisensor_processing
+      okvis_deep_learning
+      okvis_mapping
+      pthread
+      ${Boost_LIBRARIES}
+      ${TORCH_LIBRARIES}
+      ${GeographicLib_LIBRARIES}
+      SRL::Supereight2
+      SRL::Projection
+    )
+  endif()
 endif()
 
 # ros2
@@ -469,7 +488,10 @@ if(BUILD_ROS2)
   find_package(cv_bridge REQUIRED)
   find_package(std_srvs REQUIRED)
   find_package(std_msgs REQUIRED)
-  find_package(language_feature_msgs REQUIRED)
+  # only the vision-language (FindAnything) nodes need these messages
+  if(USE_NN AND USE_COLIDMAP)
+    find_package(language_feature_msgs REQUIRED)
+  endif()
   find_package(sensor_msgs REQUIRED)
   find_package(visualization_msgs REQUIRED)
   find_package(nav_msgs REQUIRED)
@@ -514,7 +536,7 @@ if(BUILD_ROS2)
     PRIVATE
       ${GLOG_INCLUDE_DIRS}
   )
-  if(USE_NN)
+  if(USE_NN OR USE_TENSORRT)
     target_link_libraries(${LIB_NAME}
       okvis::DeepLearning
     )
@@ -559,7 +581,6 @@ if(BUILD_ROS2)
     Eigen3
     sensor_msgs
     visualization_msgs
-    language_feature_msgs
     std_srvs
     nav_msgs
     pcl_conversions
@@ -614,6 +635,18 @@ if(BUILD_ROS2)
     ${PCL_LIBRARIES}
   )
   install(TARGETS okvis2x_node_subscriber DESTINATION lib/${PROJECT_NAME})
+
+  # Synchronous (blocking) processing of a dataset folder or ROS2 bag read from disk
+  add_executable(okvis_node_synchronous okvis_ros2/src/okvis_node_synchronous.cpp)
+  target_link_libraries(
+    okvis_node_synchronous
+    okvis::Ros2
+    ${OpenCV_LIBS}
+    ${SUITESPARSE_LIBRARIES}
+    ${Boost_LIBRARIES}
+    ${PCL_LIBRARIES}
+  )
+  install(TARGETS okvis_node_synchronous DESTINATION lib/${PROJECT_NAME})
   # Realsense
   if(HAVE_LIBREALSENSE)
 
@@ -640,8 +673,8 @@ if(BUILD_ROS2)
     install(TARGETS okvis2x_node_realsense DESTINATION lib/${PROJECT_NAME})
   endif()
 
-  # OKVIS2X nodes - Wo/ Deep Learning W/Deep Learning
-  if(USE_NN)
+  # OKVIS2X nodes - W/ Stereo Network (TorchScript or TensorRT backend)
+  if(USE_NN OR USE_TENSORRT)
     # W/ Stereo Network Processor
     add_executable(okvis2x_stereo_network_node_subscriber okvis_ros2/src/okvis2x_network_node.cpp)
     target_compile_definitions(okvis2x_stereo_network_node_subscriber PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR)
@@ -656,6 +689,23 @@ if(BUILD_ROS2)
     )
     install(TARGETS okvis2x_stereo_network_node_subscriber DESTINATION lib/${PROJECT_NAME})
 
+    # W/ Stereo Network Processor, reading a ROS2 bag sequentially (no `ros2 bag play`)
+    add_executable(okvis2x_stereo_network_node_bag okvis_ros2/src/okvis2x_network_node_bag.cpp)
+    target_compile_definitions(okvis2x_stereo_network_node_bag PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR)
+    target_link_libraries(
+      okvis2x_stereo_network_node_bag
+      okvis::Ros2
+      ${OpenCV_LIBS}
+      ${SUITESPARSE_LIBRARIES}
+      ${Boost_LIBRARIES}
+      ${PCL_LIBRARIES}
+      okvis::DeepLearning
+    )
+    install(TARGETS okvis2x_stereo_network_node_bag DESTINATION lib/${PROJECT_NAME})
+  endif()
+
+  # OKVIS2X nodes - Wo/ Deep Learning W/Deep Learning
+  if(USE_NN)
     # W/ DFusion Processor
     add_executable(okvis2x_depthfusion_network_node_subscriber okvis_ros2/src/okvis2x_network_node.cpp)
     target_compile_definitions(okvis2x_depthfusion_network_node_subscriber PUBLIC OKVIS_DFUSION_NETWORK_PROCESSOR)
@@ -683,7 +733,7 @@ if(BUILD_ROS2)
         ${PCL_LIBRARIES}
         okvis::DeepLearning
       )
-      ament_target_dependencies(okvis2x_language_network_node_subscriber std_msgs)
+      ament_target_dependencies(okvis2x_language_network_node_subscriber std_msgs language_feature_msgs)
       install(TARGETS okvis2x_language_network_node_subscriber DESTINATION lib/${PROJECT_NAME})
     endif()
 
@@ -701,7 +751,7 @@ if(BUILD_ROS2)
           ${PCL_LIBRARIES}
           okvis::DeepLearning
         )
-        ament_target_dependencies(okvis2x_language_network_node_realsense std_msgs)
+        ament_target_dependencies(okvis2x_language_network_node_realsense std_msgs language_feature_msgs)
         install(TARGETS okvis2x_language_network_node_realsense DESTINATION lib/${PROJECT_NAME})
       endif()
 

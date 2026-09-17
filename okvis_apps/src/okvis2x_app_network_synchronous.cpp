@@ -41,7 +41,7 @@
 #if defined(OKVIS_LANGUAGE_NETWORK_PROCESSOR)
 #include <okvis/VisionLanguageProcessor.hpp>
 #elif defined(OKVIS_STEREO_NETWORK_PROCESSOR)
-#include <okvis/Stereo2DepthProcessor.hpp>
+#include <okvis/StereoDepthProcessorFactory.hpp>
 #elif defined(OKVIS_DFUSION_NETWORK_PROCESSOR)
 #include <okvis/DepthFusionProcessor.hpp>
 #endif
@@ -147,7 +147,8 @@ int main(int argc, char **argv)
   std::shared_ptr<okvis::DeepLearningProcessor> processor;
 
   #ifdef OKVIS_STEREO_NETWORK_PROCESSOR
-  processor.reset(new okvis::Stereo2DepthProcessor(parameters, dBowVocDir));
+  // TensorRT depth-model.engine if present (USE_TENSORRT), else TorchScript depth-model.pt (USE_NN)
+  processor.reset(okvis::createStereoDepthProcessor(parameters, dBowVocDir));
   #elif defined(OKVIS_DFUSION_NETWORK_PROCESSOR)
   processor.reset(new okvis::DepthFusionProcessor(parameters, dBowVocDir));
   #elif defined(OKVIS_LANGUAGE_NETWORK_PROCESSOR)

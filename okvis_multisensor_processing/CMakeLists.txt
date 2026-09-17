@@ -14,11 +14,13 @@ add_library(${LIB_NAME}
   include/okvis/DatasetReader.hpp
   include/okvis/DatasetWriter.hpp
   include/okvis/QueuedTrajectory.hpp
+  include/okvis/RerunVisualizer.hpp
   include/okvis/Realsense.hpp
   include/okvis/RealsenseRgbd.hpp
   include/okvis/RpgDatasetReader.hpp
   include/okvis/ThreadedSlam.hpp
   include/okvis/TrajectoryOutput.hpp
+  include/okvis/TumVieDatasetReader.hpp
   include/okvis/ViSensorBase.hpp
   include/okvis/ViVisualizer.hpp
   include/okvis/implementation/QueuedTrajectory.hpp
@@ -28,9 +30,11 @@ add_library(${LIB_NAME}
   src/XDatasetReader.cpp
   src/LeicaDatasetReader.cpp
   src/RpgDatasetReader.cpp
+  src/RerunVisualizer.cpp
   src/SubmappingInterface.cpp
   src/ThreadedSlam.cpp
   src/TrajectoryOutput.cpp
+  src/TumVieDatasetReader.cpp
   src/ViVisualizer.cpp
 )
 target_include_directories(${LIB_NAME}
@@ -67,6 +71,12 @@ target_compile_options(${LIB_NAME}
 
 if(USE_COLIDMAP)
   target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_COLIDMAP)
+endif()
+
+if(USE_RERUN)
+  target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_RERUN)
+  # build-tree only: rerun_sdk is not part of the okvis export set
+  target_link_libraries(${LIB_NAME} $<BUILD_INTERFACE:rerun_sdk>)
 endif()
 
 if(HAVE_LIBREALSENSE)

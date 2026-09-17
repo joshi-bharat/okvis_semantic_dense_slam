@@ -21,6 +21,7 @@
 #define INCLUDE_OKVIS_PARAMETERS_HPP_
 
 #include <set>
+#include <string>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverloaded-virtual"
 #include <opencv2/core.hpp>
@@ -175,6 +176,24 @@ struct LidarParameters {
 
 
 /// @brief Struct to combine all parameters and settings.
+/**
+ * \brief TensorRT stereo depth network parameters (tensorrt_parameters in the config file).
+ *
+ * Only used when OKVIS is built with USE_TENSORRT and an engine is available. Defaults reproduce
+ * the TorchScript depth-model.pt contract (raw pixel values in, disparity [+ 1-sigma] out).
+ */
+struct TensorRtParameters {
+  /// Serialised TensorRT engine (.engine/.plan). Relative paths are resolved against the config
+  /// file's directory. Empty: use depth-model.engine, else depth-model.pt, from the resources dir.
+  std::string engine;
+
+  /// Network input size [pixels]. 0: use the (rectified) image size, rounded up to a multiple of 32.
+  /// A size >= the image size is reached by padding, a smaller one by resizing; the disparity is
+  /// rescaled to image pixels either way, so the calibrated focal length stays valid.
+  int network_width = 0;
+  int network_height = 0;
+};
+
 struct ViParameters {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   okvis::cameras::NCameraSystem nCameraSystem;  ///< Camera extrinsics and intrinsics.
@@ -185,6 +204,7 @@ struct ViParameters {
   FrontendParameters frontend; ///< Frontend parameters.
   EstimatorParameters estimator; ///< Estimator parameters.
   OutputParameters output; ///< Output parameters.
+  TensorRtParameters tensorrt; ///< TensorRT stereo depth network parameters.
   CameraCalibration rgb;  ///< RGB parameters.
 };
 

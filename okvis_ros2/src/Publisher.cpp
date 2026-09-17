@@ -255,8 +255,10 @@ void Publisher::publishEstimatorUpdate(
   meshMsg_->pose.orientation.w = T_WS.q().w();
 
   // publish mesh
+  // publish a copy: meshMsg_ is modified again on the next update while the worker may still be
+  // serialising the previous one
   if(!meshMsg_->mesh_resource.empty())
-    pubMesh_.publish(meshMsg_);  //publish stamped mesh
+    pubMesh_.publish(std::make_shared<visualization_msgs::msg::Marker>(*meshMsg_));
 
   // check if empty
   if(updatedStates->empty()) {
@@ -310,7 +312,7 @@ void Publisher::publishEstimatorUpdate(
   path->color.g = 0.8;
   path->color.b = 0.0;
   path->color.a = 1.0;
-  path->scale.x = 0.015;
+  path->scale.x = 0.05;
   path->lifetime = rclcpp::Duration::from_seconds(0); // 0 for infinity
 
   // publish paths as batches of 1000 points.
@@ -338,10 +340,13 @@ void Publisher::publishEstimatorUpdate(
     uint64_t roundedId = (id/1000)*1000;
     if(path->id != int64_t(roundedId)) {
       pubPath_.publish(path); // first publish finished segment
+      // The publisher worker still owns the previous shared_ptr; allocate a
+      // fresh Marker for the next segment instead of mutating the published one.
+      geometry_msgs::msg::Point lastPoint = path->points.back();
+      auto previousPath = path;
+      path = std::make_shared<visualization_msgs::msg::Marker>(*previousPath);
       path->id = roundedId;
-      // ..object ID useful in conjunction with namespace for manipulating&deleting the object later
-      geometry_msgs::msg::Point lastPoint =  path->points.back(); // save last point
-      path->points.clear(); // start new segment
+      path->points.clear();
       path->points.push_back(lastPoint);
     }
     okvis::State state;
@@ -596,10 +601,13 @@ void Publisher::publishSubmapsAsCallback(std::unordered_map<uint64_t, okvis::kin
     #endif
   }
 
+  // If too many submaps are updated at once (> 1GB) ROS considers it out of sync
+  // and does not update. To prevent this, we batch submaps in smaller packets.
+  // Each batch must use its own fresh shared_ptr because the threaded publisher
+  // worker may still be serializing the previously-published MarkerArray on
+  // another thread; mutating the shared instance under it caused
+  // free(): invalid pointer crashes inside rmw/DDS.
   auto markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
-  markerarraymsg_->markers.clear();
-  //If too many submaps are to be updated at once (> 1GB) ROS considers it has gone out of sync and does not update.
-  // To prevent this, we generate buffers of submaps and send them in smaller packets to bypass this issue
   int submap_publisher_buffer = 0;
 
   if(publishMode_ == "Colors"){
@@ -611,7 +619,7 @@ void Publisher::publishSubmapsAsCallback(std::unordered_map<uint64_t, okvis::kin
       if(submap_publisher_buffer == 30){
         submap_publisher_buffer = 0;
         pubSubmapMesh_.publish(markerarraymsg_);
-        markerarraymsg_->markers.clear();
+        markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
       }
     }
   }
@@ -624,15 +632,15 @@ void Publisher::publishSubmapsAsCallback(std::unordered_map<uint64_t, okvis::kin
       if(submap_publisher_buffer == 30){
         submap_publisher_buffer = 0;
         pubSubmapMesh_.publish(markerarraymsg_);
-        markerarraymsg_->markers.clear();
+        markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
       }
     }
   }
-  
+
   if(markerarraymsg_->markers.size() > 0) {
       pubSubmapMesh_.publish(markerarraymsg_);
   }
-  
+
   return;
 }
 
@@ -953,10 +961,9 @@ void Publisher::republishMeshes()
     #endif
   }
 
+  // See note in publishSubmapsAsCallback: each batch needs its own shared_ptr
+  // because the worker thread is still serializing the previous one.
   auto markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
-  markerarraymsg_->markers.clear();
-  //If too many submaps are to be updated at once (> 1GB) ROS considers it has gone out of sync and does not update.
-  // To prevent this, we generate buffers of submaps and send them in smaller packets to bypass this issue
   int submap_publisher_buffer = 0;
   if(publishMode_ == "Colors"){
     for(auto it: submapMeshLookup_rgb_){
@@ -967,7 +974,7 @@ void Publisher::republishMeshes()
       if(submap_publisher_buffer == 30){
         submap_publisher_buffer = 0;
         pubSubmapMesh_.publish(markerarraymsg_);
-        markerarraymsg_->markers.clear();
+        markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
       }
     }
   }
@@ -980,11 +987,11 @@ void Publisher::republishMeshes()
       if(submap_publisher_buffer == 30){
         submap_publisher_buffer = 0;
         pubSubmapMesh_.publish(markerarraymsg_);
-        markerarraymsg_->markers.clear();
+        markerarraymsg_ = std::make_shared<visualization_msgs::msg::MarkerArray>();
       }
     }
   }
-  
+
   if(markerarraymsg_->markers.size() > 0) {
       pubSubmapMesh_.publish(markerarraymsg_);
   }

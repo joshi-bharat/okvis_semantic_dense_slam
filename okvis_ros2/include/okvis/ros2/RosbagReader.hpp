@@ -20,7 +20,11 @@
 #define INCLUDE_OKVIS_ROSBAGREADER_HPP_
 
 #include <atomic>
+#include <functional>
+#include <set>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <glog/logging.h>
 
@@ -33,17 +37,39 @@
 #include <okvis/FrameTypedefs.hpp>
 #include <okvis/Measurements.hpp>
 #include <okvis/ViSensorBase.hpp>
+#include <okvis/kinematics/Transformation.hpp>
 
 /// \brief okvis Main namespace of this package.
 namespace okvis {
 
-/// @brief Reader class acting like a VI sensor.
+/// @brief Topic names for RosbagReader, and how to decode images.
+struct RosbagTopics {
+  std::string imu = "/okvis/imu0"; ///< sensor_msgs/Imu topic.
+  /// Image topic per camera. Empty entries (or a short vector) default to /okvis/cam<i>/image_raw.
+  std::vector<std::string> cameras;
+  /// Depth image topic per camera. Empty entries default to /okvis/depth<i>/image_raw.
+  std::vector<std::string> depths;
+  std::vector<bool> isColour; ///< Per camera: output rgb8 instead of mono8. Default: mono8.
+  /// Optional ground-truth pose topic (nav_msgs/Odometry, geometry_msgs/PoseStamped or
+  /// geometry_msgs/TransformStamped). Empty: none.
+  std::string groundTruth;
+};
+
+/// @brief Reader class acting like a VI sensor, reading a ROS2 bag file sequentially.
+///
+/// Messages are consumed in bag order directly from disk (sqlite3 or mcap); nothing is replayed
+/// or published, so combined with a blocking estimator no data is dropped.
+/// Images may be sensor_msgs/Image in any cv_bridge-convertible encoding, or
+/// sensor_msgs/CompressedImage; they are converted to mono8 (or rgb8 for colour cameras).
 /// @warning Make sure to use this in combination with synchronous
 /// processing, as there is no throttling of the reading process.
 class RosbagReader : public DatasetReaderBase {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   OKVIS_DEFINE_EXCEPTION(Exception, std::runtime_error)
+
+  /// @brief Topic names to read, and how to decode images.
+  using Topics = RosbagTopics;
 
   /// @brief Disallow default construction.
   RosbagReader() = delete;
@@ -53,8 +79,9 @@ public:
   /// @param numCameras The total number of cameras.
   /// @param syncCameras Camera group to force synchronisation.
   /// @param deltaT Duration [s] to skip in the beginning.
+  /// @param topics Topic names to read and image decoding options.
   RosbagReader(const std::string& path, size_t numCameras, const std::set<size_t> & syncCameras,
-                const Duration & deltaT = Duration(0.0));
+                const Duration & deltaT = Duration(0.0), const Topics & topics = Topics());
 
   /// @brief Destructor: stops streaming.
   virtual ~RosbagReader();
@@ -72,6 +99,16 @@ public:
   /// @brief Starts reading the dataset.
   /// @return True, if successful
   virtual bool startStreaming() final;
+
+  /// @brief Ground-truth pose callback: timestamp and pose in the ground-truth world frame.
+  typedef std::function<void(const okvis::Time &, const okvis::kinematics::Transformation &)>
+      GroundTruthCallback;
+
+  /// @brief Set a callback for the ground-truth topic (Topics::groundTruth). Call before streaming.
+  /// @param callback The callback.
+  void setGroundTruthCallback(const GroundTruthCallback & callback) {
+    groundTruthCallback_ = callback;
+  }
 
   /// @brief Stops reading the dataset.
   /// @return True, if successful
@@ -100,6 +137,11 @@ private:
 
   size_t numCameras_ = 0; ///< Total number of cameras.
   std::set<size_t> syncCameras_; ///< Camera group to force synchronisation.
+
+  Topics topics_; ///< Resolved topic names (one per camera).
+  std::vector<bool> camIsCompressed_; ///< Per camera: topic is sensor_msgs/CompressedImage.
+  std::string groundTruthType_; ///< Message type of the ground-truth topic.
+  GroundTruthCallback groundTruthCallback_; ///< Ground-truth callback.
 
   Duration deltaT_ = okvis::Duration(0.0); ///< Skip duration [s].
 

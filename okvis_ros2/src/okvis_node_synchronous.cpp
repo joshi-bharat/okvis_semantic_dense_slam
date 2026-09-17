@@ -17,9 +17,14 @@
  * @author Andreas Forster
  */
 
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
 #include <execinfo.h>
+#include <unistd.h>
 #include <Eigen/Core>
 #include <fstream>
+#include <thread>
 
 #include <boost/filesystem.hpp>
 
@@ -39,6 +44,23 @@
 #include <okvis/TrajectoryOutput.hpp>
 #include <okvis/ros2/Publisher.hpp>
 #include <okvis/ThreadedPublisher.hpp>
+#include <okvis/RerunVisualizer.hpp>
+
+namespace {
+
+/// Number of SIGINT/SIGTERM received. 1: stop gracefully, 2: exit immediately.
+std::atomic_int g_interrupts{0};
+
+void onInterrupt(int) {
+  if (++g_interrupts >= 2) {
+    static const char msg[] = "\nSecond interrupt -- exiting immediately.\n";
+    const ssize_t ignored = write(STDERR_FILENO, msg, sizeof(msg) - 1); // async-signal-safe
+    (void)ignored;
+    std::_Exit(130);
+  }
+}
+
+}  // namespace
 
 /// \brief Main
 /// \param argc argc.
@@ -46,8 +68,10 @@
 int main(int argc, char **argv)
 {
 
-  // ros2 setup
-  rclcpp::init(argc, argv);
+  // ros2 setup; own signal handling so that Ctrl+C stops reading instead of processing the rest
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  std::signal(SIGINT, onInterrupt);
+  std::signal(SIGTERM, onInterrupt);
   std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("okvis_node_synchronous");
 
   // publisher
@@ -72,17 +96,44 @@ int main(int argc, char **argv)
   bool rosbag = false;
   std::string configFilename("");
   std::string path("");
+  std::string csvPath("");
+  double startDelay = 0.0;
+  okvis::RosbagReader::Topics bagTopics;
 
   node->declare_parameter("rpg", false);
   node->declare_parameter("rgb", false);
   node->declare_parameter("config_filename", "");
   node->declare_parameter("path", "");
+  node->declare_parameter("csv_path", ""); // default: next to the dataset / bag
+  node->declare_parameter("start_delay", 0.0); // [s] to skip at the beginning
   node->declare_parameter("imu_propagated_state_publishing_rate", 0.0);
+  // ROS2 bag topics (remapping does not apply when reading a bag file)
+  node->declare_parameter("imu_topic", bagTopics.imu);
+  node->declare_parameter("cam_topics", std::vector<std::string>{});
+  node->declare_parameter("depth_topics", std::vector<std::string>{});
+  node->declare_parameter("ground_truth_topic", ""); // Odometry / PoseStamped / TransformStamped
+  // visualisation
+  node->declare_parameter("rerun", true); // log to Rerun (needs a build with -DUSE_RERUN=ON)
+  node->declare_parameter("rerun_url", ""); // empty: spawn viewer; or rerun+http://host:9876/proxy, or file.rrd
+  node->declare_parameter("show_images", true); // OpenCV windows with the feature-match overlays
 
   node->get_parameter("rpg", rpg);
   node->get_parameter("rgb", rgb);
   node->get_parameter("config_filename", configFilename);
   node->get_parameter("path", path);
+  node->get_parameter("csv_path", csvPath);
+  node->get_parameter("start_delay", startDelay);
+  node->get_parameter("imu_topic", bagTopics.imu);
+  node->get_parameter("cam_topics", bagTopics.cameras);
+  node->get_parameter("depth_topics", bagTopics.depths);
+  node->get_parameter("ground_truth_topic", bagTopics.groundTruth);
+  bool useRerun = true;
+  std::string rerunUrl;
+  bool showImages = true;
+  node->get_parameter("rerun", useRerun);
+  node->get_parameter("rerun_url", rerunUrl);
+  node->get_parameter("show_images", showImages);
+  deltaT = okvis::Duration(startDelay);
   if (configFilename.compare("")==0){
     LOG(ERROR) << "ros parameter 'config_filename' not set";
     return EXIT_FAILURE;
@@ -91,12 +142,21 @@ int main(int argc, char **argv)
     LOG(ERROR) << "ros parameter 'path' not set";
     return EXIT_FAILURE;
   }
+  if (csvPath.empty()) {
+    csvPath = path;
+  }
   double imu_propagated_state_publishing_rate = 0.0;
   node->get_parameter("imu_propagated_state_publishing_rate", imu_propagated_state_publishing_rate);
 
   okvis::ViParametersReader viParametersReader(configFilename);
   okvis::ViParameters parameters;
   viParametersReader.getParameters(parameters);
+
+  // Rerun visualisation (declared before reader and estimator, which call into it)
+  okvis::RerunVisualizer rerun;
+  if (useRerun && rerun.init("okvis2", rerunUrl)) {
+    rerun.logCameras(parameters.nCameraSystem);
+  }
 
   // dataset reader
   std::shared_ptr<okvis::DatasetReaderBase> dataset_reader;
@@ -107,9 +167,19 @@ int main(int argc, char **argv)
     rosbag = true;
   }
   if(rosbag) {
-    dataset_reader.reset(new okvis::RosbagReader(
-      path, int(parameters.nCameraSystem.numCameras()),
-      parameters.camera.sync_cameras, deltaT));
+    for (size_t i = 0; i < parameters.nCameraSystem.numCameras(); ++i) {
+      bagTopics.isColour.push_back(parameters.nCameraSystem.cameraType(i).isColour);
+    }
+    auto bagReader = std::make_shared<okvis::RosbagReader>(
+      path, parameters.nCameraSystem.numCameras(),
+      parameters.camera.sync_cameras, deltaT, bagTopics);
+    if (!bagTopics.groundTruth.empty()) {
+      bagReader->setGroundTruthCallback(
+        [&rerun](const okvis::Time & t, const okvis::kinematics::Transformation & T_WS) {
+          rerun.addGroundTruthPose(t, T_WS);
+        });
+    }
+    dataset_reader = bagReader;
   } else if(rpg) {
     dataset_reader.reset(new okvis::RpgDatasetReader(
       path, deltaT, int(parameters.nCameraSystem.numCameras())));
@@ -141,13 +211,16 @@ int main(int argc, char **argv)
   }
 
   // setup publishing
-  publisher.setCsvFile(path + "/okvis2-" + mode + "-live_trajectory.csv", rpg);
-  estimator.setFinalTrajectoryCsvFile(path+"/okvis2-" + mode + "-final_trajectory.csv", rpg);
-  estimator.setMapCsvFile(path+"/okvis2-" + mode + "-final_map.csv");
+  publisher.setCsvFile(csvPath + "/okvis2-" + mode + "-live_trajectory.csv", rpg);
+  estimator.setFinalTrajectoryCsvFile(csvPath+"/okvis2-" + mode + "-final_trajectory.csv", rpg);
+  estimator.setMapCsvFile(csvPath+"/okvis2-" + mode + "-final_map.csv");
   estimator.setOptimisedGraphCallback(
-    std::bind(&okvis::Publisher::publishEstimatorUpdate, &publisher,
-              std::placeholders::_1, std::placeholders::_2,
-              std::placeholders::_3, std::placeholders::_4));
+    [&publisher, &rerun](const okvis::State & state, const okvis::TrackingState & trackingState,
+                         std::shared_ptr<const okvis::AlignedMap<okvis::StateId, okvis::State>> updated,
+                         std::shared_ptr<const okvis::MapPointVector> landmarks) {
+      publisher.publishEstimatorUpdate(state, trackingState, updated, landmarks);
+      rerun.logEstimatorUpdate(state, trackingState, updated, landmarks);
+    });
   publisher.setBodyTransform(parameters.imu.T_BS);
   publisher.setOdometryPublishingRate(imu_propagated_state_publishing_rate);
   publisher.setupImageTopics(parameters.nCameraSystem);
@@ -166,15 +239,24 @@ int main(int argc, char **argv)
 
   // start
   okvis::Time startTime = okvis::Time::now();
-  dataset_reader->startStreaming();
+  if (!dataset_reader->startStreaming()) {
+    LOG(ERROR) << "could not start reading " << path;
+    return EXIT_FAILURE;
+  }
   int progress = 0;
-  while (rclcpp::ok()) {
+  while (rclcpp::ok() && g_interrupts == 0) {
     rclcpp::spin_some(node);
 
     estimator.processFrame();
     std::map<std::string, cv::Mat> images;
     estimator.display(images);
     publisher.publishImages(images);
+    if (showImages && !images.empty()) {
+      for (const auto & image : images) {
+        cv::imshow(image.first, image.second);
+      }
+      cv::waitKey(1);
+    }
 
     // check if done
     if(!dataset_reader->isStreaming()) {
@@ -207,5 +289,18 @@ int main(int argc, char **argv)
                 << std::flush;
     }
   }
-  return EXIT_SUCCESS;
+
+  // interrupted (Ctrl+C): stop reading instead of letting the estimator drain the whole dataset.
+  // The reader may be blocked handing a frame to the full estimator queue, so request the stop on a
+  // separate thread while stopThreading() drains the queue.
+  if (dataset_reader->isStreaming()) {
+    LOG(WARNING) << "Interrupted -- stopping without final BA (Ctrl+C again to exit immediately)...";
+    std::thread stopReader([&dataset_reader]() { dataset_reader->stopStreaming(); });
+    estimator.stopThreading();
+    stopReader.join();
+    estimator.writeFinalTrajectoryCsv();
+    LOG(INFO) << "Trajectory so far written to " << csvPath;
+  }
+  rclcpp::shutdown();
+  return g_interrupts > 0 ? 130 : EXIT_SUCCESS;
 }

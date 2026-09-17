@@ -1,15 +1,15 @@
 %YAML:1.0
 cameras:
      - {T_SC:
-        [ 0.0148655429818, -0.999880929698, 0.00414029679422, -0.0216401454975,
-          0.999557249008, 0.0149672133247, 0.025715529948, -0.064676986768,
-          -0.0257744366974, 0.00375618835797, 0.999660727178, 0.00981073058949,
-           0.0, 0.0, 0.0, 1.0],
-        image_dimension: [752, 480],
-        distortion_coefficients: [-0.28340811217, 0.0739590738929, 0.000193595028569, 1.76187114545e-05],
-        distortion_type: radialtangential,
-        focal_length: [458.654880721, 457.296696463],
-        principal_point: [367.215803962, 248.37534061],
+        [ 0.000669801106380, -0.999992639835587, -0.003777782568266,  0.009613984901839,
+         -0.999967443133507, -0.000639396013667, -0.008043870074392,  0.053927993466963,
+          0.008041395371071,  0.003783047368578, -0.999960511476875, -0.026555625688742,
+          0.0, 0.0, 0.0, 1.0],
+        image_dimension: [1024, 1024],
+        distortion_coefficients: [0.019702988705266412, 0.0019647288278805426, 0.0020858202586604944, -0.0009536922337319427],
+        distortion_type: equidistant,
+        focal_length: [747.3121949097032, 747.1524375957724],
+        principal_point: [490.8606682225008, 505.2373814853779],
         cam_model: pinhole,
         camera_type: gray, #gray, rgb, gray+depth, rgb+depth
         mapping: true,
@@ -17,15 +17,15 @@ cameras:
         slam_use: okvis} #none, okvis, okvis-depth, okvis-virtual
 
      - {T_SC:
-        [ 0.0125552670891, -0.999755099723, 0.0182237714554, -0.0198435579556,
-          0.999598781151, 0.0130119051815, 0.0251588363115, 0.0453689425024,
-          -0.0253898008918, 0.0179005838253, 0.999517347078, 0.00786212447038,
-           0.0, 0.0, 0.0, 1.0],
-        image_dimension: [752, 480],
-        distortion_coefficients: [-0.283683654496, 0.0745128430929, -0.000104738949098, -3.55590700274e-05],
-        distortion_type: radialtangential,
-        focal_length: [457.587426604, 456.13442556],
-        principal_point: [379.99944652, 255.238185386],
+        [ 0.000816230148270, -0.999982042949638, -0.005936964427479,  0.009377835983335,
+         -0.999999032790158, -0.000822901092009,  0.001121272732758, -0.055491944846254,
+         -0.001126138132518,  0.005936043468580, -0.999981747433845, -0.026426117046140,
+          0.0, 0.0, 0.0, 1.0],
+        image_dimension: [1024, 1024],
+        distortion_coefficients: [0.019143394892292526, 0.0017469400418519364, 0.003535762629018563, -0.0014236433279599385],
+        distortion_type: equidistant,
+        focal_length: [742.5207932360779, 742.4219114252868],
+        principal_point: [494.72989356499005, 513.9144417615198],
         cam_model: pinhole,
         mapping_rectification: true,
         camera_type: gray, #gray, rgb, gray+depth, rgb+depth
@@ -35,7 +35,8 @@ cameras:
 camera_parameters:
     timestamp_tolerance: 0.005 # [s] stereo frame out-of-sync tolerance
     sync_cameras: [0, 1] # the cameras that will be synchronised
-    image_delay: 0.0 # [s] timestamp_camera_correct = timestamp_camera - image_delay
+    image_delay: -0.005104563 # [s] timestamp_camera_correct = timestamp_camera - image_delay
+                              # = -cam_time_offset_ns (Basalt: t_imu_clock = t_cam + offset, offset = 5104563 ns)
     online_calibration: # some parameters to set the online
         do_extrinsics: false # Do we online-calibrate extrinsics?
         do_extrinsics_final_ba: false # Do we calibrate extrinsics in final BA?
@@ -50,15 +51,17 @@ imu_parameters:
     use: true
     a_max: 176.0 # acceleration saturation [m/s^2]
     g_max: 7.8 # gyro saturation [rad/s]
-    sigma_g_c: 20.0e-4 # gyro noise density [rad/s/sqrt(Hz)]
-    sigma_a_c: 20.0e-3 # accelerometer noise density [m/s^2/sqrt(Hz)]
+    # TUM-VIE Basalt calibration values are continuous-time densities (same units as OKVIS),
+    # inflated 10x here, matching the ~10x margin OKVIS's EuRoC config applies over the EuRoC datasheet.
+    sigma_g_c: 8.4503e-4 # gyro noise density [rad/s/sqrt(Hz)] (calib: 8.4503e-05)
+    sigma_a_c: 1.2e-2 # accelerometer noise density [m/s^2/sqrt(Hz)] (calib: 0.0012)
     sigma_bg: 0.01 # gyro bias prior [rad/s]
     sigma_ba: 0.1 # accelerometer bias prior [m/s^2]
-    sigma_gw_c: 20.0e-5 # gyro drift noise density [rad/s^s/sqrt(Hz)]
-    sigma_aw_c: 20.0e-3 # accelerometer drift noise density [m/s^2/sqrt(Hz)]
+    sigma_gw_c: 1.1961e-5 # gyro drift noise density [rad/s^2/sqrt(Hz)] (calib: 1.1961e-06)
+    sigma_aw_c: 2.2856e-4 # accelerometer drift noise density [m/s^3/sqrt(Hz)] (calib: 2.2856e-05)
     g: 9.81007 # Earth's acceleration due to gravity [m/s^2]
     g0: [ 0.0, 0.0, 0.0 ] # initial gyro bias [rad/s]
-    a0: [ -0.05, 0.09, 0.01 ] # initial accelerometer bias [m/s^2]
+    a0: [ 0.0, 0.0, 0.0 ] # initial accelerometer bias [m/s^2]
     s_a: [ 1.0,  1.0, 1.0 ] # scale factor for accelerometer measurements: a_true = s_a * a_meas + b_a
     # transform Body-Sensor (IMU)
     T_BS:
@@ -94,7 +97,7 @@ estimator_parameters:
     full_graph_iterations: 15 # don't do more than these for the full (background) optimisation
     full_graph_num_threads: 3 # number of threads for the full (background) optimisation
     p_dbow: 0.4 # Match threshold for dBoW -- unfortunately this varies with setups.
-    drift_percentage_heuristic: 10.35 # % allowed drift in loop closures rel. to dist. travelled.
+    drift_percentage_heuristic: 1.35 # % allowed drift in loop closures rel. to dist. travelled.
 
 # some options for how and what to output
 output_parameters:

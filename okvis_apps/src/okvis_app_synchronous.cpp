@@ -35,9 +35,11 @@
 #include <okvis/ThreadedSlam.hpp>
 #include <okvis/DatasetReader.hpp>
 #include <okvis/RpgDatasetReader.hpp>
+#include <okvis/TumVieDatasetReader.hpp>
 #include <okvis/TrajectoryOutput.hpp>
 #include <boost/filesystem.hpp>
 
+#include <algorithm>
 #include <execinfo.h>
 
 
@@ -54,24 +56,28 @@ int main(int argc, char **argv)
 
   if (argc != 4 && argc != 5) {
     LOG(ERROR)<<
-    "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [-rpg]";
+    "Usage: ./" << argv[0] << " configuration-yaml-file dataset-folder [save-folder] [-rpg|-tumvie]";
     return EXIT_FAILURE;
   }
 
   okvis::Duration deltaT(0.0);
-  bool rpg = false;
   std::string savePath;
   savePath = std::string(argv[2]);
+  std::string formatFlag;
   if (argc == 5) {
     savePath = std::string(argv[3]);
-    if(strcmp(argv[4], "-rpg")==0) {
-      rpg = true;
-    }
+    formatFlag = std::string(argv[4]);
   }
   else if (argc == 4) {
-    if(strcmp(argv[3], "-rpg")!=0)  {
+    if(argv[3][0] == '-')  {
+      formatFlag = std::string(argv[3]);
+    } else {
       savePath = std::string(argv[3]);
     }
+  }
+  if (!formatFlag.empty() && formatFlag != "-rpg" && formatFlag != "-tumvie") {
+    LOG(ERROR) << "Unknown dataset format flag " << formatFlag << " (expected -rpg or -tumvie)";
+    return EXIT_FAILURE;
   }
 
   // read configuration file
@@ -85,9 +91,14 @@ int main(int argc, char **argv)
   // the folder path
   std::string path(argv[2]);
   std::shared_ptr<okvis::DatasetReaderBase> datasetReader;
-  if(rpg){
+  if(formatFlag == "-rpg"){
     datasetReader.reset(new okvis::RpgDatasetReader(
                           path, deltaT, int(parameters.nCameraSystem.numCameras())));
+  } else if(formatFlag == "-tumvie"){
+    // stream IMU far enough ahead to cover the estimator's IMU overlap and a negative image_delay
+    const okvis::Duration imuLookahead(0.03 + std::max(0.0, -parameters.camera.image_delay));
+    datasetReader.reset(new okvis::TumVieDatasetReader(
+                          path, deltaT, int(parameters.nCameraSystem.numCameras()), imuLookahead));
   } else {
     datasetReader.reset(new okvis::DatasetReader(
                           path, int(parameters.nCameraSystem.numCameras()),

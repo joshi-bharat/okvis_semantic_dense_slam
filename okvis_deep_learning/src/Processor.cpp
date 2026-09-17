@@ -11,7 +11,9 @@
  */
 
 #include <okvis/Processor.hpp>
+#ifdef OKVIS_USE_NN
 #include <okvis/DepthFusionProcessor.hpp>
+#endif
 
 namespace okvis {
 
@@ -33,7 +35,12 @@ Processor::Processor(okvis::ViParameters& parameters,
     std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4
   ));
 
-  if (dynamic_cast<DepthFusionProcessor*>(deepLearningProcessor_)) {
+#ifdef OKVIS_USE_NN
+  const bool isDepthFusion = dynamic_cast<DepthFusionProcessor*>(deepLearningProcessor_) != nullptr;
+#else
+  const bool isDepthFusion = false; // depth fusion needs libtorch
+#endif
+  if (isDepthFusion) {
     deepLearningProcessor_->setLiveDepthImageCallback([&] (const okvis::Time &stamp,
       const cv::Mat &depthImage,
       const std::optional<cv::Mat> &sigmaImage) {
@@ -128,7 +135,11 @@ void Processor::internalOptimizedGraphCallback(
 
   // Update supereight state.
   se_interface_.stateUpdateCallback(state, trackingState, alignedMapPtr);
+#ifdef OKVIS_USE_NN
   if (dynamic_cast<DepthFusionProcessor*>(deepLearningProcessor_)) {
+#else
+  if (false) { // depth fusion needs libtorch
+#endif
     deepLearningProcessor_->stateUpdateCallback(state, trackingState, alignedMapPtr, mapPointVectorPtr);
   }
 

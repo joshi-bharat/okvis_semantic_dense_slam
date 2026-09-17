@@ -32,21 +32,78 @@
 #else
   #include <cv_bridge/cv_bridge.h> // ros2 changed to .hpp some point...
 #endif
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <rosbag2_storage/storage_options.hpp>
 
 #include <okvis/ViInterface.hpp>
 #include <okvis/ros2/RosbagReader.hpp>
 
 namespace okvis {
 
+namespace {
+
+/// @brief Decode a (possibly compressed) serialized image message to mono8 or rgb8.
+cv::Mat decodeImage(rclcpp::SerializedMessage & serialized, bool compressed, bool colour,
+                    okvis::Time & time) {
+  if (compressed) {
+    sensor_msgs::msg::CompressedImage msg;
+    rclcpp::Serialization<sensor_msgs::msg::CompressedImage>().deserialize_message(&serialized, &msg);
+    time = okvis::Time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+    cv::Mat image = cv::imdecode(msg.data, colour ? cv::IMREAD_COLOR : cv::IMREAD_GRAYSCALE);
+    if (colour && !image.empty()) {
+      cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
+    }
+    return image;
+  }
+  auto msg = std::make_shared<sensor_msgs::msg::Image>();
+  rclcpp::Serialization<sensor_msgs::msg::Image>().deserialize_message(&serialized, msg.get());
+  time = okvis::Time(msg->header.stamp.sec, msg->header.stamp.nanosec);
+  return cv_bridge::toCvCopy(msg, colour ? sensor_msgs::image_encodings::RGB8
+                                         : sensor_msgs::image_encodings::MONO8)->image;
+}
+
+/// @brief Decode a serialized depth image message to CV_32FC1 [m].
+cv::Mat decodeDepth(rclcpp::SerializedMessage & serialized, okvis::Time & time) {
+  auto msg = std::make_shared<sensor_msgs::msg::Image>();
+  rclcpp::Serialization<sensor_msgs::msg::Image>().deserialize_message(&serialized, msg.get());
+  time = okvis::Time(msg->header.stamp.sec, msg->header.stamp.nanosec);
+  if (msg->encoding == sensor_msgs::image_encodings::TYPE_16UC1
+      || msg->encoding == sensor_msgs::image_encodings::MONO16) {
+    cv::Mat depth;
+    cv_bridge::toCvShare(msg)->image.convertTo(depth, CV_32F, 0.001); // [mm] -> [m]
+    return depth;
+  }
+  return cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::TYPE_32FC1)->image;
+}
+
+}  // namespace
+
 RosbagReader::RosbagReader(const std::string& path, size_t numCameras,
-                           const std::set<size_t> &syncCameras, const Duration & deltaT) :
-    numCameras_(numCameras), syncCameras_(syncCameras), deltaT_(deltaT) {
+                           const std::set<size_t> &syncCameras, const Duration & deltaT,
+                           const Topics & topics) :
+    numCameras_(numCameras), syncCameras_(syncCameras), topics_(topics), deltaT_(deltaT) {
   streaming_ = false;
   setDatasetPath(path);
   counter_ = 0;
+
+  // resolve default topic names
+  topics_.cameras.resize(numCameras_);
+  topics_.depths.resize(numCameras_);
+  topics_.isColour.resize(numCameras_, false);
+  for (size_t i = 0; i < numCameras_; ++i) {
+    if (topics_.cameras[i].empty()) {
+      topics_.cameras[i] = "/okvis/cam" + std::to_string(i) + "/image_raw";
+    }
+    if (topics_.depths[i].empty()) {
+      topics_.depths[i] = "/okvis/depth" + std::to_string(i) + "/image_raw";
+    }
+  }
+  camIsCompressed_.assign(numCameras_, false);
 }
 
 RosbagReader::~RosbagReader() {
@@ -74,7 +131,7 @@ bool RosbagReader::isStreaming()
 }
 
 double RosbagReader::completion() const {
-  if(streaming_) {
+  if(streaming_ && numImages_ > 0) {
     return double(counter_)/double(numImages_);
   }
   return 0.0;
@@ -84,7 +141,7 @@ bool RosbagReader::startStreaming() {
   OKVIS_ASSERT_TRUE(Exception, !imagesCallbacks_.empty(), "no add image callback registered")
   OKVIS_ASSERT_TRUE(Exception, !imuCallbacks_.empty(), "no add IMU callback registered")
   
-  // set options
+  // set options (storage plugin, sqlite3 or mcap, is detected from the bag metadata)
   rosbag2_storage::StorageOptions storage_options{};
   storage_options.uri = path_;
   rosbag2_cpp::ConverterOptions converter_options{};
@@ -96,40 +153,65 @@ bool RosbagReader::startStreaming() {
   
   // parse metadata
   const auto & metadata = reader_.get_metadata();
-  int numImuMeasurements = 0;
-  std::vector<int> numRgbImages(numCameras_, 0);
-  std::vector<int> numCamImages(numCameras_, 0);
-  std::vector<int> numDepthImages(numCameras_, 0);
+  size_t numImuMeasurements = 0;
+  std::vector<size_t> numCamImages(numCameras_, 0);
+  std::vector<size_t> numDepthImages(numCameras_, 0);
   for(const auto & info : metadata.topics_with_message_count) {
-    if(info.topic_metadata.name.compare("/okvis/imu0") == 0) {
+    const std::string & name = info.topic_metadata.name;
+    if(name == topics_.imu) {
       numImuMeasurements = info.message_count;
     }
-    for(int i=0; i<int(numCameras_); ++i) {
-      if(info.topic_metadata.name.compare("/okvis/cam"+std::to_string(i)+"/image_raw") == 0) {
+    if(!topics_.groundTruth.empty() && name == topics_.groundTruth) {
+      groundTruthType_ = info.topic_metadata.type;
+      LOG(INFO) << "No. ground-truth poses on " << name << " [" << groundTruthType_ << "]: "
+                << info.message_count;
+    }
+    for(size_t i = 0; i < numCameras_; ++i) {
+      if(name == topics_.cameras[i]) {
         numCamImages[i] = info.message_count;
-        if(i==0) {
-          numImages_ =  numCamImages[i];
-        }
+        camIsCompressed_[i] = info.topic_metadata.type == "sensor_msgs/msg/CompressedImage";
       }
-      if(info.topic_metadata.name.compare("/okvis/rgb"+std::to_string(i)+"/image_raw") == 0) {
-        numRgbImages[i] = info.message_count;
+      if(name == topics_.depths[i]) {
+        numDepthImages[i] = info.message_count;
       }
-      if(info.topic_metadata.name.compare("/okvis/depth"+std::to_string(i)+"/image_raw") == 0) {
-        numRgbImages[i] = info.message_count;
-      }
-    }  
+    }
   }
-  
+  numImages_ = numCamImages.empty() ? 0 : numCamImages[0];
+
   // print info
-  LOG(INFO)<< "No. IMU measurements: " << numImuMeasurements;
-  if (numImuMeasurements <= 0) {
-    LOG(ERROR)<< "no imu messages present in bag";
-    return -1;
+  LOG(INFO) << "Bag " << path_ << " (" << metadata.storage_identifier << ")";
+  LOG(INFO) << "No. IMU measurements on " << topics_.imu << ": " << numImuMeasurements;
+  for(size_t i = 0; i < numCameras_; ++i) {
+    LOG(INFO) << "No. cam " << i << " images on " << topics_.cameras[i] << ": " << numCamImages[i]
+              << (camIsCompressed_[i] ? " (compressed)" : "")
+              << (topics_.isColour[i] ? " -> rgb8" : " -> mono8");
+    if (numDepthImages[i] > 0) {
+      LOG(INFO) << "No. cam " << i << " depth images on " << topics_.depths[i] << ": "
+                << numDepthImages[i];
+    }
   }
-  for(int i=0; i<int(numCameras_); ++i) {
-    LOG(INFO)<< "No. cam " << i << " RGB images: " << numRgbImages[i];
-    LOG(INFO)<< "No. cam " << i << " images: " << numCamImages[i];
-    LOG(INFO)<< "No. cam " << i << " depth images: " << numDepthImages[i];
+  bool missing = numImuMeasurements == 0;
+  for(size_t i = 0; i < numCameras_; ++i) {
+    missing |= numCamImages[i] == 0;
+  }
+  if (!topics_.groundTruth.empty()) {
+    if (groundTruthType_.empty()) {
+      LOG(WARNING) << "ground-truth topic " << topics_.groundTruth << " not in bag -- ignoring";
+    } else if (groundTruthType_ != "nav_msgs/msg/Odometry"
+               && groundTruthType_ != "geometry_msgs/msg/PoseStamped"
+               && groundTruthType_ != "geometry_msgs/msg/TransformStamped") {
+      LOG(WARNING) << "unsupported ground-truth type " << groundTruthType_ << " -- ignoring";
+      groundTruthType_.clear();
+    }
+  }
+  if (missing) {
+    std::stringstream available;
+    for(const auto & info : metadata.topics_with_message_count) {
+      available << "\n  " << info.topic_metadata.name << " [" << info.topic_metadata.type << "] "
+                << info.message_count;
+    }
+    LOG(ERROR) << "IMU or camera topic missing in bag. Available topics:" << available.str();
+    return false;
   }
 
   counter_ = 0;
@@ -140,15 +222,13 @@ bool RosbagReader::startStreaming() {
 }
 
 bool RosbagReader::stopStreaming() {
-  // Stop the pipeline
+  // Stop the pipeline: the processing loop exits after its current (possibly blocking) callback
+  streaming_ = false;
   if(processingThread_.joinable()) {
     processingThread_.join();
-    streaming_ = false;
   }
   return true;
 }
-
-
 
 void  RosbagReader::processing() {
   okvis::Time start(0.0);
@@ -165,10 +245,10 @@ void  RosbagReader::processing() {
     // serialize data
     auto serialized_message = reader_.read_next();
     rclcpp::SerializedMessage extracted_serialized_msg(*serialized_message->serialized_data);
-    auto topic = serialized_message->topic_name;
+    const std::string & topic = serialized_message->topic_name;
     
     // check if IMU
-    if (topic.find("/okvis/imu0") != std::string::npos) {
+    if (topic == topics_.imu) {
       sensor_msgs::msg::Imu msg;
       rclcpp::Serialization<sensor_msgs::msg::Imu> serialization_info;
       serialization_info.deserialize_message(&extracted_serialized_msg, &msg);
@@ -179,23 +259,68 @@ void  RosbagReader::processing() {
       Eigen::Vector3d gyr(msg.angular_velocity.x, msg.angular_velocity.y,
                       msg.angular_velocity.z); 
       
-      // add it
-      for (auto &imuCallback : imuCallbacks_) {
-        imuCallback(t_imu, acc, gyr);
+      // add it (keeping 1 s of IMU before the requested start, like the other readers)
+      if (start == okvis::Time(0.0) || t_imu - start + okvis::Duration(1.0) > deltaT_) {
+        for (auto &imuCallback : imuCallbacks_) {
+          imuCallback(t_imu, acc, gyr);
+        }
       }
+      continue;
     }
     
+    // check if ground truth
+    if (!groundTruthType_.empty() && topic == topics_.groundTruth) {
+      if (groundTruthCallback_) {
+        okvis::Time t;
+        Eigen::Vector3d r;
+        Eigen::Quaterniond q;
+        if (groundTruthType_ == "nav_msgs/msg/Odometry") {
+          nav_msgs::msg::Odometry msg;
+          rclcpp::Serialization<nav_msgs::msg::Odometry>().deserialize_message(
+              &extracted_serialized_msg, &msg);
+          t = okvis::Time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+          const auto & p = msg.pose.pose;
+          r = Eigen::Vector3d(p.position.x, p.position.y, p.position.z);
+          q = Eigen::Quaterniond(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z);
+        } else if (groundTruthType_ == "geometry_msgs/msg/PoseStamped") {
+          geometry_msgs::msg::PoseStamped msg;
+          rclcpp::Serialization<geometry_msgs::msg::PoseStamped>().deserialize_message(
+              &extracted_serialized_msg, &msg);
+          t = okvis::Time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+          const auto & p = msg.pose;
+          r = Eigen::Vector3d(p.position.x, p.position.y, p.position.z);
+          q = Eigen::Quaterniond(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z);
+        } else {
+          geometry_msgs::msg::TransformStamped msg;
+          rclcpp::Serialization<geometry_msgs::msg::TransformStamped>().deserialize_message(
+              &extracted_serialized_msg, &msg);
+          t = okvis::Time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+          const auto & tf = msg.transform;
+          r = Eigen::Vector3d(tf.translation.x, tf.translation.y, tf.translation.z);
+          q = Eigen::Quaterniond(tf.rotation.w, tf.rotation.x, tf.rotation.y, tf.rotation.z);
+        }
+        groundTruthCallback_(t, okvis::kinematics::Transformation(r, q.normalized()));
+      }
+      continue;
+    }
+
     // check if image
     okvis::Time t_unsynced(0.0);
-    for(int i=0; i<int(numCameras_); ++i) {
-      if (topic.find("/okvis/cam"+std::to_string(i)+"/image_raw") != std::string::npos) {
-        sensor_msgs::msg::Image msg;
-        rclcpp::Serialization<sensor_msgs::msg::Image> serialization_info;
-        serialization_info.deserialize_message(&extracted_serialized_msg, &msg);
-        const cv::Mat raw(msg.height, msg.width, CV_8UC1,
-                    const_cast<uint8_t*>(&msg.data[0]), msg.step);
-        cv::Mat image = raw.clone();
-        okvis::Time time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+    for(size_t i = 0; i < numCameras_; ++i) {
+      if (topic == topics_.cameras[i]) {
+        okvis::Time time;
+        cv::Mat image;
+        try {
+          image = decodeImage(extracted_serialized_msg, camIsCompressed_[i], topics_.isColour[i],
+                              time);
+        } catch (const std::exception & e) {
+          LOG(WARNING) << "cam " << i << ": cannot decode image (" << e.what() << ") -- dropping";
+          continue;
+        }
+        if (image.empty()) {
+          LOG(WARNING) << "cam " << i << ": empty image at t=" << time << " -- dropping";
+          continue;
+        }
       
         if(syncCameras_.count(i)) {
           if(imagesSync.count(i)) {
@@ -209,14 +334,15 @@ void  RosbagReader::processing() {
         }
         t_images[i] = time;
       }
-      if (topic.find("/okvis/depth"+std::to_string(i)+"/image_raw") != std::string::npos) {
-        sensor_msgs::msg::Image msg;
-        rclcpp::Serialization<sensor_msgs::msg::Image> serialization_info;
-        serialization_info.deserialize_message(&extracted_serialized_msg, &msg);
-        const cv::Mat raw(msg.height, msg.width, CV_32FC1,
-                          reinterpret_cast<float*>(&msg.data[0]), msg.step);
-        cv::Mat depthImage = raw.clone();
-        okvis::Time time(msg.header.stamp.sec, msg.header.stamp.nanosec);
+      if (topic == topics_.depths[i]) {
+        okvis::Time time;
+        cv::Mat depthImage;
+        try {
+          depthImage = decodeDepth(extracted_serialized_msg, time);
+        } catch (const std::exception & e) {
+          LOG(WARNING) << "depth " << i << ": cannot decode image (" << e.what() << ") -- dropping";
+          continue;
+        }
         
         if(syncCameras_.count(i)) {
           if(depthImagesSync.count(i)) {
@@ -293,10 +419,15 @@ void  RosbagReader::processing() {
       } else {
         t = t_unsynced;
       }
-      // finally we are ready to call the image callback
+      if (start == okvis::Time(0.0)) {
+        start = t;
+      }
 
-      for(auto & imagesCallback : imagesCallbacks_) {
-        imagesCallback(t, images, depthImages);
+      // finally we are ready to call the image callback (unless still within the skip duration)
+      if (t - start >= deltaT_) {
+        for(auto & imagesCallback : imagesCallbacks_) {
+          imagesCallback(t, images, depthImages);
+        }
       }
       if(images.count(0) && !images.at(0).empty()) {
         ++counter_; // reference for counter is always image 0.

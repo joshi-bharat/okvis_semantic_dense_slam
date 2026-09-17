@@ -5,3 +5,10 @@
 *.png
 *.asv
 /documentation
+
+# Build / install output and local artefacts
+/install*
+/CMakeCache.txt
+/CMakeFiles/
+/results*
+__pycache__/

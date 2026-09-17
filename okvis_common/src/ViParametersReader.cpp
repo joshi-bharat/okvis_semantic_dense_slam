@@ -18,6 +18,7 @@
  */
 
 #include <algorithm>
+#include <filesystem>
 
 #include <glog/logging.h>
 
@@ -262,6 +263,29 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
   parseEntry(file["camera_parameters"]["online_calibration"], "sigma_alpha_final_ba",
              viParameters_.camera.online_calibration.sigma_alpha_final_ba);
   viParameters_.camera.stereo_indices = sidx;
+
+  // TensorRT stereo depth network parameters (optional section; defaults if absent)
+  viParameters_.tensorrt = TensorRtParameters();
+  const cv::FileNode trt = file["tensorrt_parameters"];
+  if (!trt.empty()) {
+    TensorRtParameters & p = viParameters_.tensorrt;
+    if (trt["engine"].isString()) {
+      p.engine = std::string(trt["engine"]);
+      if (!p.engine.empty() && p.engine[0] != '/') {
+        p.engine =
+            (std::filesystem::path(filename).parent_path() / p.engine).lexically_normal().string();
+      }
+    }
+    if (trt["network_width"].isInt()) {
+      p.network_width = int(trt["network_width"]);
+    }
+    if (trt["network_height"].isInt()) {
+      p.network_height = int(trt["network_height"]);
+    }
+    LOG(INFO) << "TensorRT parameters: engine=" << (p.engine.empty() ? "(none)" : p.engine)
+              << ", network size " << p.network_width << "x" << p.network_height
+              << " (0: from images)";
+  }
 
   //IMU parameters.
   parseEntry(file["imu_parameters"], "use",
