@@ -194,6 +194,23 @@ struct TensorRtParameters {
   int network_height = 0;
 };
 
+/**
+ * \brief SuperPoint frontend parameters (frontend_parameters in the config file).
+ *
+ * An empty engine selects the BRISK frontend, which is the default. With an engine set, keypoints
+ * and descriptors come from SuperPoint and loop closure is disabled: the DBoW2 vocabulary and
+ * FBrisk are specific to 48-byte binary descriptors.
+ */
+struct SuperPointParameters {
+  /// Serialised TensorRT engine (.engine/.plan). Relative paths are resolved against the config
+  /// file's directory. Empty: use BRISK.
+  std::string engine;
+
+  double threshold = 0.005; ///< Minimum score for a keypoint to survive.
+  int nms_radius = 4; ///< Non-maximum suppression radius and border margin [pixels].
+  double matching_threshold = 0.8; ///< Minimum cosine similarity for a descriptor match.
+};
+
 struct ViParameters {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   okvis::cameras::NCameraSystem nCameraSystem;  ///< Camera extrinsics and intrinsics.
@@ -205,6 +222,7 @@ struct ViParameters {
   EstimatorParameters estimator; ///< Estimator parameters.
   OutputParameters output; ///< Output parameters.
   TensorRtParameters tensorrt; ///< TensorRT stereo depth network parameters.
+  SuperPointParameters superpoint; ///< SuperPoint frontend parameters.
   CameraCalibration rgb;  ///< RGB parameters.
 };
 

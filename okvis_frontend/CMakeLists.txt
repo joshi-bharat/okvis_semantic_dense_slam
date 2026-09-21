@@ -92,3 +92,35 @@ install(TARGETS ${LIB_NAME} EXPORT okvisTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 install(DIRECTORY include/okvis DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} FILES_MATCHING PATTERN "*.hpp")
+
+# testing
+if(BUILD_TESTS)
+  if(APPLE)
+    add_definitions(-DGTEST_HAS_TR1_TUPLE=1)
+  else()
+    add_definitions(-DGTEST_HAS_TR1_TUPLE=0)
+  endif(APPLE)
+  enable_testing()
+  set(PROJECT_TEST_NAME ${LIB_NAME}_test)
+  add_executable(${PROJECT_TEST_NAME}
+    test/runTests.cpp
+    test/TestSuperPointParameters.cpp
+  )
+  target_link_libraries(${PROJECT_TEST_NAME}
+    ${LIB_NAME}
+    okvis::Common
+    gtest
+  )
+  target_compile_options(${PROJECT_TEST_NAME}
+    PUBLIC
+    ${OKVIS_PUBLIC_CXX_FLAGS}
+    PRIVATE
+    ${OKVIS_PRIVATE_CXX_FLAGS}
+  )
+  # The parameter reader needs a complete config, so the tests build their fixtures from the
+  # real ones rather than from hand-written stubs.
+  target_compile_definitions(${PROJECT_TEST_NAME}
+    PRIVATE OKVIS_TEST_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config"
+  )
+  add_test(NAME ${PROJECT_TEST_NAME} COMMAND ${PROJECT_TEST_NAME})
+endif()

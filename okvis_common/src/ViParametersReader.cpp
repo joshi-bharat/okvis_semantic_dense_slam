@@ -287,6 +287,35 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
               << " (0: from images)";
   }
 
+  // SuperPoint frontend parameters. An empty engine keeps the BRISK frontend.
+  const cv::FileNode frontendNode = file["frontend_parameters"];
+  if (!frontendNode.empty()) {
+    SuperPointParameters & sp = viParameters_.superpoint;
+    if (frontendNode["superpoint_engine"].isString()) {
+      sp.engine = std::string(frontendNode["superpoint_engine"]);
+      if (!sp.engine.empty() && sp.engine[0] != '/') {
+        sp.engine =
+            (std::filesystem::path(filename).parent_path() / sp.engine).lexically_normal().string();
+      }
+    }
+    // All optional, so check the nodes rather than using parseEntry, which asserts on absence.
+    if (frontendNode["superpoint_threshold"].isReal()) {
+      sp.threshold = double(frontendNode["superpoint_threshold"]);
+    }
+    if (frontendNode["superpoint_nms_radius"].isInt()) {
+      sp.nms_radius = int(frontendNode["superpoint_nms_radius"]);
+    }
+    if (frontendNode["superpoint_matching_threshold"].isReal()) {
+      sp.matching_threshold = double(frontendNode["superpoint_matching_threshold"]);
+    }
+    if (!sp.engine.empty()) {
+      LOG(INFO) << "SuperPoint frontend: engine=" << sp.engine << ", threshold=" << sp.threshold
+                << ", nms_radius=" << sp.nms_radius
+                << ", matching_threshold=" << sp.matching_threshold;
+      LOG(WARNING) << "SuperPoint frontend active: loop closure is DISABLED.";
+    }
+  }
+
   //IMU parameters.
   parseEntry(file["imu_parameters"], "use",
              viParameters_.imu.use);
