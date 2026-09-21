@@ -15,19 +15,19 @@ option (BUILD_TESTS
 option (BUILD_ROS2
         "Builds ros2 wrapper" ON)
 option (HAVE_LIBREALSENSE
-        "Use realsense as part of okvis" ON)
+        "Use realsense as part of okvis" OFF)
 option (USE_NN
         "Use keypoint classification as part of okvis, requires torch" ON)
 option (USE_GPU
-        "Use keypoint classification with GPU inference, requires torch with Cuda" OFF)
+        "Use keypoint classification with GPU inference, requires torch with Cuda" ON)
 option (DO_TIMING
         "Enable timing" ON)
 option (BUILD_SHARED_LIBS
         "Whether to build okvis as a shared library" OFF)
 
 option (USE_COLIDMAP "Whether to build okvis supportin colour and object's id 'for language based OKVIS' or regular one" ON)
-option (USE_RERUN "Log the estimate to a Rerun viewer (downloads the Rerun C++ SDK and Arrow)" OFF)
-option (USE_TENSORRT "Stereo depth network via a TensorRT engine (depth-model.engine), without libtorch" OFF)
+option (USE_RERUN "Log the estimate to a Rerun viewer (downloads the Rerun C++ SDK and Arrow)" ON)
+option (USE_TENSORRT "Stereo depth network via a TensorRT engine (depth-model.engine), without libtorch" ON)
 # The viewer (pip install rerun-sdk==<version>) must match the SDK version.
 # 0.38.1 has no GitHub release asset yet; this is Rerun's C++ SDK build of the 0.38.1 release commit
 # (b08c599, the same commit as `rerun --version` of pip rerun-sdk 0.38.1). For a GitHub release use
@@ -35,7 +35,18 @@ option (USE_TENSORRT "Stereo depth network via a TensorRT engine (depth-model.en
 set(RERUN_SDK_URL "https://build.rerun.io/commit/b08c599/rerun_cpp_sdk.zip"
     CACHE STRING "Rerun C++ SDK zip (0.38.1)")
 
-set(OKVIS_CXX_STANDARD 17)
+# C++20 throughout: LibTorch >= 2.14 refuses to compile as C++17. Set globally as well as on the
+# okvis targets so the vendored subprojects (ceres, supereight2, brisk, DBoW2, ...) match and the
+# ABI stays consistent across the whole build.
+set(OKVIS_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD ${OKVIS_CXX_STANDARD})
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+# LibTorch lives outside the default loader paths, so bake the directories of everything we link
+# against into the installed binaries' RPATH. Without this they fail at startup with
+# "libtorch.so: cannot open shared object file".
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 set(OKVIS_PUBLIC_CXX_FLAGS)
 if(APPLE)
   set(OKVIS_PRIVATE_CXX_FLAGS -Wall -Wpedantic -Wextra -Wno-dtor-name)
@@ -64,6 +75,14 @@ if (NOT "${CMAKE_BUILD_TYPE}" STREQUAL "Release")
 endif()
 
 if(USE_NN AND USE_GPU)
+  # Build for the GPU in this machine unless asked otherwise. Set -DCMAKE_CUDA_ARCHITECTURES=<sm>
+  # explicitly when cross-building or shipping binaries for other cards.
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
+  endif()
+endif()
+
+if(USE_NN AND USE_GPU)
   if(APPLE)
     # MPS enabled by default
     add_compile_definitions(OKVIS_USE_MPS)
@@ -75,6 +94,13 @@ if(USE_NN AND USE_GPU)
 endif()
 
 if(USE_NN)
+  # LibTorch is usually not in CMAKE_PREFIX_PATH; fall back to ~/libtorch, which is where the
+  # README tells you to unpack it. Set -DTorch_DIR=... or the Torch_DIR env var to override.
+  if(NOT Torch_DIR AND NOT DEFINED ENV{Torch_DIR}
+     AND EXISTS "$ENV{HOME}/libtorch/share/cmake/Torch/TorchConfig.cmake")
+    set(Torch_DIR "$ENV{HOME}/libtorch/share/cmake/Torch")
+    message(STATUS "Torch_DIR not given, using ${Torch_DIR}")
+  endif()
   find_package(Torch REQUIRED)
 
   # Function to check if file exists and has correct hash
@@ -92,44 +118,56 @@ if(USE_NN)
   # Download the models.
   message(STATUS "Downloading depth models")
 
-  # Get Model for Depth Prediction: Unimatch-accuracy
-  # "stereo-mix-sigma.pt" was used for the VBR dataset
-  set(DEPTH_ACCURACY_URL "https://cvg.cit.tum.de/webshare/g/srl-models/unimatch/stereo-mix-sigma.pt")
-  set(DEPTH_ACCURACY_FILE "${PROJECT_SOURCE_DIR}/build/stereo-mix-sigma.pt")
-  set(DEPTH_ACCURACY_HASH "SHA256=33e7016865560adca17e4402624abfa495d0016ea0a6fb3091c18ed73f439165")
-  check_hash("${DEPTH_ACCURACY_FILE}" "${DEPTH_ACCURACY_HASH}" DEPTH_ACCURACY_OK)
-  if(DEPTH_ACCURACY_OK)
-    message(STATUS "DEPTH_ACCURACY Model already available. No Download needed!")
-  else()
-    file(DOWNLOAD
-      ${DEPTH_ACCURACY_URL}
-      ${DEPTH_ACCURACY_FILE}
-      EXPECTED_HASH ${DEPTH_ACCURACY_HASH}
-      TIMEOUT 60
-    )
-  endif()
+  # Stereo depth prediction (unimatch). Two are published; DEPTH_MODEL picks which one ends up as
+  # depth-model.pt, the name the stereo processor loads. Only the selected one is downloaded.
+  #   fast     "stereo-indoor-sigma.pt", used for the euroc and hilti22 datasets
+  #   accuracy "stereo-mix-sigma.pt", used for the VBR dataset
+  set(DEPTH_MODEL "fast" CACHE STRING "Stereo depth model to use: fast | accuracy")
+  set_property(CACHE DEPTH_MODEL PROPERTY STRINGS fast accuracy)
 
-  # Get Model for Depth Prediction: Unimatch-fast
-  # "stereo-indoor-sigma.pt" was used for the euroc and hilti22 datasets.
-  set(DEPTH_FAST_URL "https://cvg.cit.tum.de/webshare/g/srl-models/unimatch/stereo-indoor-sigma.pt")
-  set(DEPTH_FAST_FILE "${PROJECT_SOURCE_DIR}/build/stereo-indoor-sigma.pt")
-  set(DEPTH_FAST_HASH "SHA256=75d3a68b0a18e8ff1b20ac1e4b75a094d595c57cf52482485d4e8049782fe4c8")
-  check_hash("${DEPTH_FAST_FILE}" "${DEPTH_FAST_HASH}" DEPTH_FAST_OK)
-  if(DEPTH_FAST_OK)
-    message(STATUS "DEPTH_FAST Model already available. No Download needed!")
+  if(DEPTH_MODEL STREQUAL "fast")
+    set(DEPTH_URL "https://cvg.cit.tum.de/webshare/g/srl-models/unimatch/stereo-indoor-sigma.pt")
+    set(DEPTH_SOURCE_FILE "${PROJECT_SOURCE_DIR}/build/stereo-indoor-sigma.pt")
+    set(DEPTH_HASH "SHA256=75d3a68b0a18e8ff1b20ac1e4b75a094d595c57cf52482485d4e8049782fe4c8")
+  elseif(DEPTH_MODEL STREQUAL "accuracy")
+    set(DEPTH_URL "https://cvg.cit.tum.de/webshare/g/srl-models/unimatch/stereo-mix-sigma.pt")
+    set(DEPTH_SOURCE_FILE "${PROJECT_SOURCE_DIR}/build/stereo-mix-sigma.pt")
+    set(DEPTH_HASH "SHA256=33e7016865560adca17e4402624abfa495d0016ea0a6fb3091c18ed73f439165")
   else()
-    file(DOWNLOAD
-      ${DEPTH_FAST_URL}
-      ${DEPTH_FAST_FILE}
-      EXPECTED_HASH ${DEPTH_FAST_HASH}
-      TIMEOUT 60
-    )
+    message(FATAL_ERROR "DEPTH_MODEL must be 'fast' or 'accuracy', got '${DEPTH_MODEL}'")
   endif()
-
   set(DEPTH_FILE "${PROJECT_SOURCE_DIR}/build/depth-model.pt")
 
-  # Please set your desiered stereo depth model (DEPTH_FAST_FILE or DEPTH_ACCURACY_FILE) here.
-  file(RENAME ${DEPTH_FAST_FILE} ${DEPTH_FILE})
+  # Nothing to do if depth-model.pt is already the selected model. Checking the destination and
+  # not just the download keeps reconfiguring free, and catches a truncated or mismatched file.
+  check_hash("${DEPTH_FILE}" "${DEPTH_HASH}" DEPTH_INSTALLED_OK)
+  if(DEPTH_INSTALLED_OK)
+    message(STATUS "Depth model (${DEPTH_MODEL}) already in place. No download needed!")
+  else()
+    check_hash("${DEPTH_SOURCE_FILE}" "${DEPTH_HASH}" DEPTH_SOURCE_OK)
+    if(NOT DEPTH_SOURCE_OK)
+      message(STATUS "Downloading depth model (${DEPTH_MODEL})...")
+      file(DOWNLOAD
+        ${DEPTH_URL}
+        ${DEPTH_SOURCE_FILE}
+        EXPECTED_HASH ${DEPTH_HASH}
+        TIMEOUT 600
+        STATUS DEPTH_DOWNLOAD_STATUS
+      )
+      list(GET DEPTH_DOWNLOAD_STATUS 0 DEPTH_DOWNLOAD_CODE)
+      if(NOT DEPTH_DOWNLOAD_CODE EQUAL 0)
+        list(GET DEPTH_DOWNLOAD_STATUS 1 DEPTH_DOWNLOAD_MESSAGE)
+        # Remove the partial file: leaving it behind makes the next configure believe it has a
+        # download to work with, and it would be copied over a good depth-model.pt.
+        file(REMOVE "${DEPTH_SOURCE_FILE}")
+        message(FATAL_ERROR
+          "Failed to download ${DEPTH_URL}: ${DEPTH_DOWNLOAD_MESSAGE}\n"
+          "Fetch it by hand into ${DEPTH_SOURCE_FILE}, or configure with -DUSE_NN=OFF.")
+      endif()
+    endif()
+    # Copy rather than rename, so the source file survives for the next configure.
+    file(COPY_FILE "${DEPTH_SOURCE_FILE}" "${DEPTH_FILE}")
+  endif()
 
   if(BUILD_ROS2)
     file(COPY ${DEPTH_FILE}
@@ -157,42 +195,56 @@ if(USE_NN)
   endif()
 
   if(USE_COLIDMAP)
-    # Get Models for FindAnything: Efficient SAM (Original Model)
-    set(ESAM_ORIGINAL_URL "https://cvg.cit.tum.de/webshare/g/srl-models/findanything/esam-model-original.pt")
-    set(ESAM_ORIGINAL_FILE "${PROJECT_SOURCE_DIR}/build/esam-model-original.pt")
-    set(ESAM_ORIGINAL_HASH "SHA256=428d6c0409fffa6f9b5ce713ca635d22b2f4800817c1e4daed323d5c2e38735e")
-    check_hash("${ESAM_ORIGINAL_FILE}" "${ESAM_ORIGINAL_HASH}" ESAM_ORIGINAL_OK)
-    if(ESAM_ORIGINAL_OK)
-      message(STATUS "ESAM Model (Original) already available. No Download needed!")
-    else()
-      file(DOWNLOAD
-        ${ESAM_ORIGINAL_URL}
-        ${ESAM_ORIGINAL_FILE}
-        EXPECTED_HASH ${ESAM_ORIGINAL_HASH}
-        TIMEOUT 120
-      )
-    endif()
+    # Models for FindAnything: Efficient SAM. Two are published; ESAM_MODEL picks which one ends
+    # up as esam-model.pt, the name VLProcessor loads. Only the selected one is downloaded.
+    set(ESAM_MODEL "original" CACHE STRING "Efficient SAM model to use: original | fast")
+    set_property(CACHE ESAM_MODEL PROPERTY STRINGS original fast)
 
-    # Get Models for FindAnything: Efficient SAM (Fast Model)
-    set(ESAM_FAST_URL "https://cvg.cit.tum.de/webshare/g/srl-models/findanything/esam-model-fast.pt")
-    set(ESAM_FAST_FILE "${PROJECT_SOURCE_DIR}/build/esam-model-fast.pt")
-    set(ESAM_FAST_HASH "SHA256=dd76bfa171b70ea580be5361c04f936051f1be5780e57e369c310c8610c24d0f")
-    check_hash("${ESAM_FAST_FILE}" "${ESAM_FAST_HASH}" ESAM_FAST_OK)
-    if(ESAM_FAST_OK)
-      message(STATUS "ESAM Model (Fast) already available. No Download needed!")
+    if(ESAM_MODEL STREQUAL "fast")
+      set(ESAM_URL "https://cvg.cit.tum.de/webshare/g/srl-models/findanything/esam-model-fast.pt")
+      set(ESAM_SOURCE_FILE "${PROJECT_SOURCE_DIR}/build/esam-model-fast.pt")
+      set(ESAM_HASH "SHA256=dd76bfa171b70ea580be5361c04f936051f1be5780e57e369c310c8610c24d0f")
+    elseif(ESAM_MODEL STREQUAL "original")
+      set(ESAM_URL "https://cvg.cit.tum.de/webshare/g/srl-models/findanything/esam-model-original.pt")
+      set(ESAM_SOURCE_FILE "${PROJECT_SOURCE_DIR}/build/esam-model-original.pt")
+      set(ESAM_HASH "SHA256=428d6c0409fffa6f9b5ce713ca635d22b2f4800817c1e4daed323d5c2e38735e")
     else()
-      file(DOWNLOAD
-        ${ESAM_FAST_URL}
-        ${ESAM_FAST_FILE}
-        EXPECTED_HASH ${ESAM_FAST_HASH}
-        TIMEOUT 120
-      )
+      message(FATAL_ERROR "ESAM_MODEL must be 'original' or 'fast', got '${ESAM_MODEL}'")
     endif()
-
     set(ESAM_FILE "${PROJECT_SOURCE_DIR}/build/esam-model.pt")
 
-    # Please set your desiered ESAM model (ESAM_ORIGINAL_FILE or ESAM_FAST_FILE) here.
-    file(RENAME ${ESAM_ORIGINAL_FILE} ${ESAM_FILE})
+    # Nothing to do if esam-model.pt is already the selected model. Checking the destination and
+    # not just the download keeps reconfiguring free, and catches a truncated or mismatched file.
+    check_hash("${ESAM_FILE}" "${ESAM_HASH}" ESAM_INSTALLED_OK)
+    if(ESAM_INSTALLED_OK)
+      message(STATUS "ESAM model (${ESAM_MODEL}) already in place. No download needed!")
+    else()
+      check_hash("${ESAM_SOURCE_FILE}" "${ESAM_HASH}" ESAM_SOURCE_OK)
+      if(NOT ESAM_SOURCE_OK)
+        message(STATUS "Downloading ESAM model (${ESAM_MODEL}), this may take a while...")
+        file(DOWNLOAD
+          ${ESAM_URL}
+          ${ESAM_SOURCE_FILE}
+          EXPECTED_HASH ${ESAM_HASH}
+          TIMEOUT 600
+          STATUS ESAM_DOWNLOAD_STATUS
+        )
+        list(GET ESAM_DOWNLOAD_STATUS 0 ESAM_DOWNLOAD_CODE)
+        if(NOT ESAM_DOWNLOAD_CODE EQUAL 0)
+          list(GET ESAM_DOWNLOAD_STATUS 1 ESAM_DOWNLOAD_MESSAGE)
+          # Remove the partial file: leaving it behind makes the next configure believe it has a
+          # download to work with, and it would be copied over a good esam-model.pt.
+          file(REMOVE "${ESAM_SOURCE_FILE}")
+          message(FATAL_ERROR
+            "Failed to download ${ESAM_URL}: ${ESAM_DOWNLOAD_MESSAGE}\n"
+            "Fetch it by hand into ${ESAM_SOURCE_FILE}, or configure with -DUSE_COLIDMAP=OFF "
+            "to build without FindAnything.")
+        endif()
+      endif()
+      # Copy rather than rename, so the source file survives for the next configure.
+      file(COPY_FILE "${ESAM_SOURCE_FILE}" "${ESAM_FILE}")
+    endif()
+
     if(BUILD_ROS2)
       file(COPY ${ESAM_FILE}
           DESTINATION ${PROJECT_SOURCE_DIR}/resources/)
@@ -702,6 +754,24 @@ if(BUILD_ROS2)
       okvis::DeepLearning
     )
     install(TARGETS okvis2x_stereo_network_node_bag DESTINATION lib/${PROJECT_NAME})
+
+    # W/ Stereo Network Processor AND Vision-Language Mapping (FindAnything), reading a ROS2 bag.
+    # The stereo network provides the depth FindAnything needs, so no depth camera is required.
+    if(USE_NN AND USE_COLIDMAP)
+      add_executable(okvis2x_stereo_language_node_bag okvis_ros2/src/okvis2x_network_node_bag.cpp)
+      target_compile_definitions(okvis2x_stereo_language_node_bag
+                                 PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR OKVIS_LANGUAGE_NETWORK_PROCESSOR)
+      target_link_libraries(
+        okvis2x_stereo_language_node_bag
+        okvis::Ros2
+        ${OpenCV_LIBS}
+        ${SUITESPARSE_LIBRARIES}
+        ${Boost_LIBRARIES}
+        ${PCL_LIBRARIES}
+        okvis::DeepLearning
+      )
+      install(TARGETS okvis2x_stereo_language_node_bag DESTINATION lib/${PROJECT_NAME})
+    endif()
   endif()
 
   # OKVIS2X nodes - Wo/ Deep Learning W/Deep Learning
@@ -735,6 +805,23 @@ if(BUILD_ROS2)
       )
       ament_target_dependencies(okvis2x_language_network_node_subscriber std_msgs language_feature_msgs)
       install(TARGETS okvis2x_language_network_node_subscriber DESTINATION lib/${PROJECT_NAME})
+
+      # W/ Stereo Network Processor AND Vision-Language Mapping (FindAnything): the stereo network
+      # provides the depth, so this needs no depth camera.
+      add_executable(okvis2x_stereo_language_node_subscriber okvis_ros2/src/okvis2x_network_node.cpp)
+      target_compile_definitions(okvis2x_stereo_language_node_subscriber
+                                 PUBLIC OKVIS_STEREO_NETWORK_PROCESSOR OKVIS_LANGUAGE_NETWORK_PROCESSOR)
+      target_link_libraries(
+        okvis2x_stereo_language_node_subscriber
+        okvis::Ros2
+        ${OpenCV_LIBS}
+        ${SUITESPARSE_LIBRARIES}
+        ${Boost_LIBRARIES}
+        ${PCL_LIBRARIES}
+        okvis::DeepLearning
+      )
+      ament_target_dependencies(okvis2x_stereo_language_node_subscriber std_msgs language_feature_msgs)
+      install(TARGETS okvis2x_stereo_language_node_subscriber DESTINATION lib/${PROJECT_NAME})
     endif()
 
     if(HAVE_LIBREALSENSE)
