@@ -25,7 +25,9 @@ add_library(${LIB_NAME}
   include/opengv/sac_problems/absolute_pose/FrameAbsolutePoseSacProblem.hpp
   include/opengv/sac_problems/relative_pose/FrameRelativePoseSacProblem.hpp
   include/opengv/sac_problems/relative_pose/FrameRotationOnlySacProblem.hpp
+  include/okvis/SuperPointNms.hpp
   src/FBrisk.cpp
+  src/SuperPointNms.cpp
   src/FrameNoncentralAbsoluteAdapter.cpp
   src/FrameRelativeAdapter.cpp
   src/Frontend.cpp
@@ -105,6 +107,7 @@ if(BUILD_TESTS)
   add_executable(${PROJECT_TEST_NAME}
     test/runTests.cpp
     test/TestSuperPointParameters.cpp
+    test/TestSuperPointNms.cpp
   )
   target_link_libraries(${PROJECT_TEST_NAME}
     ${LIB_NAME}
