@@ -27,7 +27,9 @@ option (BUILD_SHARED_LIBS
 
 option (USE_COLIDMAP "Whether to build okvis supportin colour and object's id 'for language based OKVIS' or regular one" ON)
 option (USE_RERUN "Log the estimate to a Rerun viewer (downloads the Rerun C++ SDK and Arrow)" ON)
-option (USE_TENSORRT "Stereo depth network via a TensorRT engine (depth-model.engine), without libtorch" ON)
+# TensorRT is always on: the stereo depth network and the SuperPoint frontend both run through it.
+# FORCE overrides a stale -DUSE_TENSORRT=OFF in an existing build cache.
+set(USE_TENSORRT ON CACHE BOOL "Stereo depth network and SuperPoint via TensorRT engines, without libtorch" FORCE)
 # The viewer (pip install rerun-sdk==<version>) must match the SDK version.
 # 0.38.1 has no GitHub release asset yet; this is Rerun's C++ SDK build of the 0.38.1 release commit
 # (b08c599, the same commit as `rerun --version` of pip rerun-sdk 0.38.1). For a GitHub release use
