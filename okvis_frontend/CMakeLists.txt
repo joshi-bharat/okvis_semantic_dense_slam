@@ -77,6 +77,17 @@ if(USE_NN)
     target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_GPU)
   endif()
 endif()
+# SuperPoint runs on the GPU, so its matcher and extractor are only built with TensorRT. Without
+# them the frontend is BRISK-only.
+if(USE_TENSORRT)
+  find_package(CUDAToolkit REQUIRED)
+  target_sources(${LIB_NAME} PRIVATE
+    include/okvis/CublasMatcher.hpp
+    src/CublasMatcher.cpp
+  )
+  target_link_libraries(${LIB_NAME} PRIVATE CUDA::cublas CUDA::cudart)
+  target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_SUPERPOINT)
+endif()
 add_library(okvis::Frontend ALIAS ${LIB_NAME})
 
 # the DBoW2 pre-built vocabulary
@@ -112,6 +123,9 @@ if(BUILD_TESTS)
     test/TestSuperPointNms.cpp
     test/TestSuperPointDescriptors.cpp
   )
+  if(USE_TENSORRT)
+    target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp)
+  endif()
   target_link_libraries(${PROJECT_TEST_NAME}
     ${LIB_NAME}
     okvis::Common
