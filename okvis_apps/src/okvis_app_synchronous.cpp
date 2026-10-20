@@ -80,13 +80,12 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  // create the output directory if it does not exist yet
+  // create the output directory if it does not exist yet; a failure only warns, writing will tell
   boost::system::error_code createError;
   boost::filesystem::create_directories(savePath, createError);
   if (createError) {
-    LOG(ERROR) << "Could not create output directory " << savePath << ": "
-               << createError.message();
-    return EXIT_FAILURE;
+    LOG(WARNING) << "Could not create output directory " << savePath << ": "
+                 << createError.message();
   }
 
   // read configuration file

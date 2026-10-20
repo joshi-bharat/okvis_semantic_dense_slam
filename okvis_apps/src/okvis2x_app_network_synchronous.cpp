@@ -132,6 +132,14 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
+  // create the output directory if it does not exist yet; a failure only warns, writing will tell
+  boost::system::error_code createError;
+  boost::filesystem::create_directories(savePath, createError);
+  if (createError) {
+    LOG(WARNING) << "Could not create output directory " << savePath << ": "
+                 << createError.message();
+  }
+
   // Setup OKVIS estimatpr
   std::shared_ptr<okvis::ThreadedSlam> estimator(nullptr);
   estimator.reset(new okvis::ThreadedSlam(parameters, dBowVocDir, submapConfig));
