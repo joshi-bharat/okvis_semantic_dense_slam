@@ -61,7 +61,13 @@ private:
   SuperPointParameters parameters_; ///< Threshold, radius, engine path.
   int maxKeypoints_; ///< Keypoint budget.
   cv::Size networkSize_; ///< Engine input size [pixels].
-  InferenceFunction inference_; ///< Network call.
+  InferenceFunction inference_; ///< Network call (dense engine: score map, descriptor grid).
+
+  /// @brief Network call of an engine with built-in NMS and top-k: keypoints (N x 2, x y),
+  ///        scores (N) and descriptors (N x D).
+  using SparseInferenceFunction = std::function<void(const cv::Mat & input, cv::Mat & keypoints,
+                                                     cv::Mat & scores, cv::Mat & descriptors)>;
+  SparseInferenceFunction sparseInference_; ///< Set instead of inference_ for such engines.
   std::shared_ptr<TensorRtEngine> engine_; ///< Null when an inference function was injected.
 };
 

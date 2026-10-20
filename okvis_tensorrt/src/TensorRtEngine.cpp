@@ -267,6 +267,19 @@ void TensorRtEngine::infer() {
 cv::Mat TensorRtEngine::getOutput(const std::string & name) {
   cudaSetDevice(device_);
   const DataType type = fromTrt(engine_->getTensorDataType(name.c_str()));
+  if (type == DataType::Int64) {
+    // OpenCV has no 64-bit integer Mat; indices and coordinates fit in 32 bits.
+    const int64_t count = volume(shape(name));
+    std::vector<int64_t> host(static_cast<size_t>(count));
+    checkCuda(cudaMemcpy(host.data(), buffers_.at(name).device, size_t(count) * sizeof(int64_t),
+                         cudaMemcpyDeviceToHost),
+              "cudaMemcpy (output)");
+    cv::Mat result(1, int(count), CV_32S);
+    for (int64_t i = 0; i < count; ++i) {
+      result.at<int32_t>(0, int(i)) = int32_t(host[size_t(i)]);
+    }
+    return result;
+  }
   const int depth = cvDepth(type);
   if (depth < 0) {
     throw std::runtime_error(std::string("output ") + name + " has unsupported type "

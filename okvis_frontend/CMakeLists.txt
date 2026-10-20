@@ -27,9 +27,11 @@ add_library(${LIB_NAME}
   include/opengv/sac_problems/relative_pose/FrameRotationOnlySacProblem.hpp
   include/okvis/SuperPointDescriptors.hpp
   include/okvis/SuperPointNms.hpp
+  include/okvis/SuperPointSparse.hpp
   src/FBrisk.cpp
   src/SuperPointDescriptors.cpp
   src/SuperPointNms.cpp
+  src/SuperPointSparse.cpp
   src/FrameNoncentralAbsoluteAdapter.cpp
   src/FrameRelativeAdapter.cpp
   src/Frontend.cpp
@@ -126,7 +128,8 @@ if(BUILD_TESTS)
     test/TestSuperPointDescriptors.cpp
   )
   if(USE_TENSORRT)
-    target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp test/TestSuperPointExtractor.cpp)
+    target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp test/TestSuperPointExtractor.cpp
+      test/TestSuperPointSparse.cpp)
   endif()
   target_link_libraries(${PROJECT_TEST_NAME}
     ${LIB_NAME}

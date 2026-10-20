@@ -90,7 +90,7 @@ class TensorRtEngine {
   void infer();
 
   /// @brief Copy an output to the host as a continuous Mat with the output's element count
-  ///        (rows = 1, cols = element count, depth = element type).
+  ///        (rows = 1, cols = element count, depth = element type; int64 comes back as CV_32S).
   cv::Mat getOutput(const std::string & name);
 
   /// @brief Size in bytes of one element of the given type.
