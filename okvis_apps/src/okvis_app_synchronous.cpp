@@ -80,6 +80,15 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
+  // create the output directory if it does not exist yet
+  boost::system::error_code createError;
+  boost::filesystem::create_directories(savePath, createError);
+  if (createError) {
+    LOG(ERROR) << "Could not create output directory " << savePath << ": "
+               << createError.message();
+    return EXIT_FAILURE;
+  }
+
   // read configuration file
   std::string configFilename(argv[1]);
 
