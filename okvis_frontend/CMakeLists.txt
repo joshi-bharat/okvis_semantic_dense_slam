@@ -28,10 +28,12 @@ add_library(${LIB_NAME}
   include/okvis/SuperPointDescriptors.hpp
   include/okvis/SuperPointNms.hpp
   include/okvis/SuperPointSparse.hpp
+  include/okvis/SuperPointMatchFilter.hpp
   src/FBrisk.cpp
   src/SuperPointDescriptors.cpp
   src/SuperPointNms.cpp
   src/SuperPointSparse.cpp
+  src/SuperPointMatchFilter.cpp
   src/FrameNoncentralAbsoluteAdapter.cpp
   src/FrameRelativeAdapter.cpp
   src/Frontend.cpp
@@ -129,7 +131,7 @@ if(BUILD_TESTS)
   )
   if(USE_TENSORRT)
     target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp test/TestSuperPointExtractor.cpp
-      test/TestSuperPointSparse.cpp)
+      test/TestSuperPointSparse.cpp test/TestSuperPointMatchFilter.cpp)
   endif()
   target_link_libraries(${PROJECT_TEST_NAME}
     ${LIB_NAME}

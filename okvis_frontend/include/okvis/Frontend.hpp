@@ -452,6 +452,13 @@ private:
   /// SuperPoint match acceptance as a distance (1 - minimum cosine similarity), so that all
   /// matching code keeps BRISK's sense of comparison: lower is better.
   double superPointMatchingDistance_ = 0.2;
+  double superPointRatioTest_ = 1.0; ///< Lowe's ratio on L2 distances; >= 1 disables it.
+  bool superPointCrossCheck_ = false; ///< Keep only mutual best SuperPoint matches.
+
+  /// @brief Is the ratio test or the cross-check on? Without either, matching is unfiltered.
+  bool superPointFiltersMatches() const {
+    return isSuperPointActive() && (superPointRatioTest_ < 1.0 || superPointCrossCheck_);
+  }
 
   /// @brief Matching acceptance threshold of whichever descriptor is in use (lower is better).
   double matchingThreshold() const {

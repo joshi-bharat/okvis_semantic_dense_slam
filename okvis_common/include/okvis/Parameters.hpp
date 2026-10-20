@@ -213,6 +213,8 @@ struct SuperPointParameters {
   double threshold = 0.005; ///< Minimum score for a keypoint to survive.
   int nms_radius = 4; ///< Non-maximum suppression radius and border margin [pixels].
   double matching_threshold = 0.8; ///< Minimum cosine similarity for a descriptor match.
+  double ratio_test = 1.0; ///< Lowe's ratio on L2 descriptor distances; >= 1 disables it.
+  bool cross_check = false; ///< Keep only mutual best matches.
 };
 
 struct ViParameters {

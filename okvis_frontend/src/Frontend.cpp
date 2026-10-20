@@ -58,6 +58,7 @@
 #include <okvis/Frontend.hpp>
 #include <okvis/CublasMatcher.hpp>
 #include <okvis/SuperPointExtractor.hpp>
+#include <okvis/SuperPointMatchFilter.hpp>
 
 // okvis ceres
 #include <okvis/ceres/PoseParameterBlock.hpp>
@@ -214,6 +215,8 @@ void Frontend::setSuperPointParameters(const SuperPointParameters & parameters,
     return; // BRISK
   }
   superPointMatchingDistance_ = 1.0 - parameters.matching_threshold;
+  superPointRatioTest_ = parameters.ratio_test;
+  superPointCrossCheck_ = parameters.cross_check;
   superPointExtractors_.resize(numCameras_);
   for (size_t i = 0; i < numCameras_; ++i) {
     superPointExtractors_[i].reset(new SuperPointExtractor(parameters, maxKeypoints));
@@ -1352,6 +1355,7 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
   int ctr = 0;
   std::vector<cv::Mat> descriptorPool(params.nCameraSystem.numCameras());
   std::vector<cv::Mat> superPointPoolDistances(params.nCameraSystem.numCameras());
+  std::vector<cv::Mat> superPointPoolDistances3d(params.nCameraSystem.numCameras());
   kinematics::Transformation T_WS1 = estimator.pose(StateId(currentFrameId));
   double reprErr = 0.0;
   for (size_t im = 0; im < params.nCameraSystem.numCameras(); ++im) {
@@ -1541,6 +1545,47 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
             multiFrame->descriptors(im), descriptorPool[im].rowRange(0, usedRows));
       }
     }
+    superPointPoolDistances3d[im] = superPointPoolDistances[im];
+    if (superPointFiltersMatches() && !superPointPoolDistances[im].empty()) {
+      // Ratio test and cross-check among the landmarks matchToMapByThread would consider: 3D,
+      // inside its reprojection radius, and not already matched.
+      const double fMean = 0.5*(multiFrame->geometryAs<CAMERA_GEOMETRY>(im)->focalLengthU()
+                                + multiFrame->geometryAs<CAMERA_GEOMETRY>(im)->focalLengthV());
+      const double gate = params.imu.use ? 3.0+fMean*0.06 : 3.0+fMean*0.34;
+      const double gateSq = gate*gate;
+      std::vector<const LandmarkToMatch*> candidates;
+      std::vector<std::pair<int, int>> groups;
+      for (const auto & landmark : landmarksToMatch) {
+        candidates.push_back(&landmark.second);
+        groups.emplace_back(landmark.second.descriptorRow,
+                            landmark.second.descriptorRow + landmark.second.descriptors.rows);
+      }
+      std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>> points(numKeypoints);
+      std::vector<bool> usable(numKeypoints, true);
+      for (size_t k = 0; k < numKeypoints; ++k) {
+        multiFrame->getKeypoint(im, k, points[k]);
+        usable[k] = !(multiFrame->landmarkId(im, k) && !loopClosureLandmarksToUseExclusively);
+      }
+      std::vector<LandmarkId> candidateIds;
+      for (const auto & landmark : landmarksToMatch) {
+        candidateIds.push_back(landmark.first);
+      }
+      superPointPoolDistances3d[im] = filterSuperPointMatches(
+          superPointPoolDistances[im], groups,
+          [&](int q, int c) {
+            const LandmarkToMatch & lm = *candidates[size_t(c)];
+            if (!usable[size_t(q)] || !lm.is3d) {
+              return false;
+            }
+            if (loopClosureLandmarksToUseExclusively
+                && !loopClosureLandmarksToUseExclusively->count(candidateIds[size_t(c)])) {
+              return false;
+            }
+            const Eigen::Vector2d r = lm.projection - points[size_t(q)];
+            return r.dot(r) <= gateSq;
+          },
+          superPointRatioTest_, superPointCrossCheck_);
+    }
 
     // multithreaded matching
     const size_t num_matching_threads = size_t(params.frontend.num_matching_threads);
@@ -1560,7 +1605,7 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
               std::cref(landmarksToMatch), numKeypoints,
               std::cref(pointMap), im, std::cref(multiFrame), std::ref(distances),
               std::ref(lmIds), std::ref(hps_W), std::ref(ctrs), std::ref(reprErrors),
-              std::cref(superPointPoolDistances[im]));
+              std::cref(superPointPoolDistances3d[im]));
     }
 
     for(size_t t = 0; t<num_matching_threads; ++t) {
@@ -1662,6 +1707,37 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
     AlignedVector<Eigen::Vector4d> hps_W(numKeypoints, Eigen::Vector4d::Zero());
     std::vector<size_t> ctrs(num_matching_threads);
 
+    // Ratio test and cross-check among the landmarks matchToMapByThreadUnitialised would consider:
+    // not 3D, with keypoints that back-project and are not matched yet (the 3D pass ran above).
+    cv::Mat superPointDistances2d = superPointPoolDistances[im];
+    if (superPointFiltersMatches() && !superPointPoolDistances[im].empty()) {
+      std::vector<const LandmarkToMatch*> candidates;
+      std::vector<LandmarkId> candidateIds;
+      std::vector<std::pair<int, int>> groups;
+      for (const auto & landmark : landmarksToMatchVec[im]) {
+        candidates.push_back(&landmark.second);
+        candidateIds.push_back(landmark.first);
+        groups.emplace_back(landmark.second.descriptorRow,
+                            landmark.second.descriptorRow + landmark.second.descriptors.rows);
+      }
+      std::vector<bool> usable(numKeypoints, false);
+      for (size_t k = 0; k < numKeypoints; ++k) {
+        Eigen::Vector3d e_C;
+        usable[k] = multiFrame->getBackProjection(im, k, e_C)
+                    && !(multiFrame->landmarkId(im, k) && !loopClosureLandmarksToUseExclusively);
+      }
+      superPointDistances2d = filterSuperPointMatches(
+          superPointPoolDistances[im], groups,
+          [&](int q, int c) {
+            if (!usable[size_t(q)] || candidates[size_t(c)]->is3d) {
+              return false;
+            }
+            return !loopClosureLandmarksToUseExclusively
+                   || loopClosureLandmarksToUseExclusively->count(candidateIds[size_t(c)]) > 0;
+          },
+          superPointRatioTest_, superPointCrossCheck_);
+    }
+
     std::vector<std::thread*> threads(num_matching_threads, nullptr);
     for(size_t t = 0; t<num_matching_threads; ++t) {
       threads[t] = new std::thread(
@@ -1671,7 +1747,7 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
               std::cref(landmarksToMatchVec[im]), numKeypoints,
               std::cref(pointMap), im, std::cref(multiFrame), std::ref(distances),
               std::ref(lmIds), std::ref(hps_W), std::ref(ctrs),
-              std::cref(superPointPoolDistances[im]));
+              std::cref(superPointDistances2d));
     }
 
     for(size_t t = 0; t<num_matching_threads; ++t) {
@@ -2082,6 +2158,31 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
       cv::Mat superPointDistances01;
       if(superPoint && k0Size > 0 && !k1s.empty()) {
         superPointDistances01 = superPointDistances(multiFrame0->descriptors(im), desc1);
+        if(superPointFiltersMatches()) {
+          // ratio test and cross-check among the pairs the matching threads below would consider
+          std::vector<bool> usable0(k0Size, false);
+          for(size_t k0 = 0; k0 < k0Size; ++k0) {
+            const uint64_t id0 = multiFrame0->landmarkId(im, k0);
+            Eigen::Vector3d e0_C;
+            usable0[k0] = !(id0 && (!estimator.isLandmarkAdded(LandmarkId(id0))
+                                    || estimator.isLandmarkInitialised(LandmarkId(id0))))
+                          && !estimator.isObserved(KeypointIdentifier{olderFrameId.value(), im, k0})
+                          && multiFrame0->getBackProjection(im, k0, e0_C);
+          }
+          std::vector<bool> usable1(k1s.size(), false);
+          for(size_t kk = 0; kk < k1s.size(); ++kk) {
+            Eigen::Vector3d e1_C;
+            usable1[kk] = multiFrame1->getBackProjection(im, k1s[kk], e1_C);
+          }
+          std::vector<std::pair<int, int>> groups;
+          for(int kk = 0; kk < int(k1s.size()); ++kk) {
+            groups.emplace_back(kk, kk + 1);
+          }
+          superPointDistances01 = filterSuperPointMatches(
+              superPointDistances01, groups,
+              [&](int q, int c) { return usable0[size_t(q)] && usable1[size_t(c)]; },
+              superPointRatioTest_, superPointCrossCheck_);
+        }
       }
 
       AlignedVector<MatchInfo> matchInfos(k0Size);
@@ -2303,6 +2404,25 @@ void Frontend::matchStereo(Estimator &estimator, std::shared_ptr<okvis::MultiFra
         if(isSuperPointActive() && k0Size > 0 && k1Size > 0) {
           superPointDistances01 = superPointDistances(multiFrame->descriptors(im0),
                                                       multiFrame->descriptors(im1));
+          if(superPointFiltersMatches()) {
+            // ratio test and cross-check among the pairs whose rays back-project
+            std::vector<bool> usable0(k0Size, false), usable1(k1Size, false);
+            Eigen::Vector3d e_C;
+            for(size_t k0 = 0; k0 < k0Size; ++k0) {
+              usable0[k0] = multiFrame->getBackProjection(im0, k0, e_C);
+            }
+            for(size_t k1 = 0; k1 < k1Size; ++k1) {
+              usable1[k1] = multiFrame->getBackProjection(im1, k1, e_C);
+            }
+            std::vector<std::pair<int, int>> groups;
+            for(int k1 = 0; k1 < int(k1Size); ++k1) {
+              groups.emplace_back(k1, k1 + 1);
+            }
+            superPointDistances01 = filterSuperPointMatches(
+                superPointDistances01, groups,
+                [&](int q, int c) { return usable0[size_t(q)] && usable1[size_t(c)]; },
+                superPointRatioTest_, superPointCrossCheck_);
+          }
         }
 
         for(size_t k0 = 0; k0 < k0Size; ++k0) {

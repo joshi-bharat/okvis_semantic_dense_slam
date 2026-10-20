@@ -92,6 +92,26 @@ TEST(SuperPointParameters, keepsAbsoluteEnginePathUnchanged) {
   EXPECT_EQ(parameters.superpoint.engine, "/opt/models/superpoint.engine");
 }
 
+TEST(SuperPointParameters, readsRatioTestAndCrossCheck) {
+  const std::string file = writeConfig("matching.yaml",
+                                       "    superpoint_ratio_test: 0.9\n"
+                                       "    superpoint_cross_check: true\n");
+  okvis::ViParametersReader reader(file);
+  okvis::ViParameters parameters;
+  reader.getParameters(parameters);
+  EXPECT_DOUBLE_EQ(parameters.superpoint.ratio_test, 0.9);
+  EXPECT_TRUE(parameters.superpoint.cross_check);
+}
+
+TEST(SuperPointParameters, ratioTestAndCrossCheckAreOffByDefault) {
+  const std::string file = writeConfig("matching-default.yaml", "");
+  okvis::ViParametersReader reader(file);
+  okvis::ViParameters parameters;
+  reader.getParameters(parameters);
+  EXPECT_DOUBLE_EQ(parameters.superpoint.ratio_test, 1.0);
+  EXPECT_FALSE(parameters.superpoint.cross_check);
+}
+
 // image_size resizes every camera; the uhumans2 cameras are 720x480 with f = 415.69, c = (360, 240).
 TEST(ImageResize, scalesIntrinsicsToTheNewImageSize) {
   const std::string file =
