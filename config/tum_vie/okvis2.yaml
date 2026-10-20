@@ -35,6 +35,8 @@ cameras:
 camera_parameters:
     timestamp_tolerance: 0.005 # [s] stereo frame out-of-sync tolerance
     sync_cameras: [0, 1] # the cameras that will be synchronised
+    # image_size: [512, 512] # resize all images to [width, height]; intrinsics are scaled to match.
+    #                         # Must keep the aspect ratio (TUM-VIE is 1024x1024). Omit: keep size.
     image_delay: -0.005104563 # [s] timestamp_camera_correct = timestamp_camera - image_delay
                               # = -cam_time_offset_ns (Basalt: t_imu_clock = t_cam + offset, offset = 5104563 ns)
     online_calibration: # some parameters to set the online
@@ -87,9 +89,9 @@ estimator_parameters:
     num_keyframes: 5 # number of keyframes in optimisation window
     num_loop_closure_frames: 3 # number of loop closure frames in optimisation window
     num_imu_frames: 3 # number of frames linked by most recent nonlinear IMU error terms
-    do_loop_closures: true # whether to do VI-SLAM or VIO
-    do_final_ba: true # Whether to run a full final BA
-    enforce_realtime: false # whether to limit the time budget for optimisation
+    do_loop_closures: false # whether to do VI-SLAM or VIO
+    do_final_ba: false # Whether to run a full final BA
+    enforce_realtime: true # whether to limit the time budget for optimisation
     realtime_min_iterations: 3 # minimum number of iterations always performed
     realtime_max_iterations: 10 # never do more than these, even if not converged
     realtime_time_limit: 0.035 # time budget for realtime optimisation [s]
