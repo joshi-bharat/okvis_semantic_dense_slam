@@ -264,10 +264,22 @@ const unsigned char * Frame::keypointDescriptor(size_t keypointIdx) const
       Exception,
       keypointIdx < keypoints_.size(),
       "keypointIdx " << keypointIdx << "out of range: keypoints has size "<< keypoints_.size())
-  return descriptors_.data + size_t(descriptors_.cols) * keypointIdx;
+  return descriptors_.data + size_t(descriptors_.cols) * descriptors_.elemSize() * keypointIdx;
 #else
-  return descriptors_.data + size_t(descriptors_.cols) * keypointIdx;
+  return descriptors_.data + size_t(descriptors_.cols) * descriptors_.elemSize() * keypointIdx;
 #endif
+}
+
+inline int Frame::descriptorDim() const {
+  return descriptors_.cols;
+}
+
+inline int Frame::descriptorType() const {
+  return descriptors_.type();
+}
+
+inline const cv::Mat & Frame::descriptors() const {
+  return descriptors_;
 }
 
 // Set the landmark ID

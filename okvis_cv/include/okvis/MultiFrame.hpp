@@ -228,6 +228,18 @@ class MultiFrame
   inline const unsigned char * keypointDescriptor(size_t cameraIdx,
                                                   size_t keypointIdx) const;
 
+  /// \brief The number of elements per descriptor (48 for BRISK, 256 for SuperPoint).
+  /// @param[in] cameraIdx The camera index.
+  inline int descriptorDim(size_t cameraIdx) const;
+
+  /// \brief The OpenCV element type of the descriptors (CV_8U for BRISK, CV_16F for SuperPoint).
+  /// @param[in] cameraIdx The camera index.
+  inline int descriptorType(size_t cameraIdx) const;
+
+  /// \brief The whole descriptor matrix of one camera, one row per keypoint.
+  /// @param[in] cameraIdx The camera index.
+  inline const cv::Mat & descriptors(size_t cameraIdx) const;
+
   /// \brief Set the landmark ID
   /// @param[in] cameraIdx The camera index.
   /// @param[in] keypointIdx The requested keypoint's index.

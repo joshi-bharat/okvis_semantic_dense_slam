@@ -184,6 +184,15 @@ class Frame
   /// \return The descriptor data pointer; nullptr if out of bounds.
   inline const unsigned char * keypointDescriptor(size_t keypointIdx) const;
 
+  /// \brief The number of elements per descriptor (48 for BRISK, 256 for SuperPoint).
+  inline int descriptorDim() const;
+
+  /// \brief The OpenCV element type of the descriptors (CV_8U for BRISK, CV_16F for SuperPoint).
+  inline int descriptorType() const;
+
+  /// \brief The whole descriptor matrix, one row per keypoint.
+  inline const cv::Mat & descriptors() const;
+
   /// \brief Set the landmark ID.
   /// @param[in] keypointIdx The requested keypoint's index.
   /// @param[in] landmarkId The landmark Id.

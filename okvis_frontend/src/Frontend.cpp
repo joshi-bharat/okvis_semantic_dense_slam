@@ -56,6 +56,8 @@
 #pragma GCC diagnostic pop
 
 #include <okvis/Frontend.hpp>
+#include <okvis/CublasMatcher.hpp>
+#include <okvis/SuperPointExtractor.hpp>
 
 // okvis ceres
 #include <okvis/ceres/PoseParameterBlock.hpp>
@@ -176,6 +178,11 @@ bool Frontend::loadComponent(std::string filename,
 
   // create component DBoW
   componentDBows_.emplace_back(std::unique_ptr<DBoW>(new DBoW(dBow_->vocabulary)));
+  if (isSuperPointActive()) {
+    // Place recognition is BRISK-only; the empty DBoW never yields a candidate.
+    LOG(WARNING) << "SuperPoint frontend: place recognition against loaded components disabled.";
+    return true;
+  }
 
   // fill component DBoW
   for (const auto &multiFrame : components_.back().multiFrames_) {
@@ -201,6 +208,29 @@ bool Frontend::loadComponent(std::string filename,
 }
 
 // Detection and descriptor extraction on a per image basis.
+void Frontend::setSuperPointParameters(const SuperPointParameters & parameters,
+                                       int maxKeypoints) {
+  if (parameters.engine.empty()) {
+    return; // BRISK
+  }
+  superPointMatchingDistance_ = 1.0 - parameters.matching_threshold;
+  superPointExtractors_.resize(numCameras_);
+  for (size_t i = 0; i < numCameras_; ++i) {
+    superPointExtractors_[i].reset(new SuperPointExtractor(parameters, maxKeypoints));
+  }
+  cublasMatcher_.reset(new CublasMatcher());
+  LOG(WARNING) << "SuperPoint frontend active: loop closure is disabled.";
+}
+
+cv::Mat Frontend::superPointDistances(const cv::Mat & query, const cv::Mat & train) const {
+  cv::Mat similarities;
+  {
+    std::lock_guard<std::mutex> lock(cublasMatcherMutex_);
+    similarities = cublasMatcher_->score(query, train);
+  }
+  return 1.0 - similarities;
+}
+
 bool Frontend::detectAndDescribe(size_t cameraIndex, std::shared_ptr<okvis::MultiFrame> frameOut,
                                  const okvis::kinematics::Transformation& T_WC,
                                  const std::vector<cv::KeyPoint>* keypoints) {
@@ -210,6 +240,17 @@ bool Frontend::detectAndDescribe(size_t cameraIndex, std::shared_ptr<okvis::Mult
 
   // check there are no keypoints here
   OKVIS_ASSERT_TRUE(Exception, keypoints == nullptr, "external keypoints currently not supported")
+
+  if (isSuperPointActive()) {
+    // SuperPoint replaces BRISK detection and description, including its camera-aware setup.
+    std::vector<cv::KeyPoint> superPointKeypoints;
+    cv::Mat superPointDescriptors;
+    superPointExtractors_[cameraIndex]->extract(frameOut->image(cameraIndex),
+                                                superPointKeypoints, superPointDescriptors);
+    frameOut->resetKeypoints(cameraIndex, superPointKeypoints);
+    frameOut->resetDescriptors(cameraIndex, superPointDescriptors);
+    return !superPointKeypoints.empty();
+  }
 
   // hack: also initialise those maps for camera-aware extraction
   for (size_t i = 0; i < numCameras_; ++i) {
@@ -787,11 +828,12 @@ bool Frontend::dataAssociationAndInitialization(
     *asKeyframe = true;  // first frame needs to be keyframe
   }
 
-  // prepare features for place recognition
-  std::vector<std::vector<uchar>> features(framesInOut->numKeypoints());
+  // prepare features for place recognition (BRISK only: the vocabulary is 48-byte binary)
+  const bool placeRecognition = !isSuperPointActive();
+  std::vector<std::vector<uchar>> features(placeRecognition ? framesInOut->numKeypoints() : 0);
   // first, we are trying to match the database for loop closures
   int offset = 0;
-  for (size_t im = 0; im < numCameras_; ++im) {
+  for (size_t im = 0; im < numCameras_ && placeRecognition; ++im) {
     for (size_t k = 0; k < framesInOut->numKeypoints(im); ++k) {
       features.at(k + offset).resize(48); // TODO: get 48 from feature
       memcpy(features.at(k + offset).data(),
@@ -802,7 +844,7 @@ bool Frontend::dataAssociationAndInitialization(
   }
 
   /*MULTI-SESSION AND MULTI-AGENT*/
-  if (!estimator.isLoopClosing() && !estimator.isLoopClosureAvailable()
+  if (placeRecognition && !estimator.isLoopClosing() && !estimator.isLoopClosureAvailable()
       && !estimator.needsFullGraphOptimisation() && isInitialized_) {
     for (uint64_t c = 0; c < componentDBows_.size(); ++c) {
       TimerSwitchable matchDBoWTimer0("2.3.0 multi-session and multi-agent place recognition");
@@ -847,7 +889,7 @@ bool Frontend::dataAssociationAndInitialization(
   }
 
   /*LOOP CLOSURES*/
-  if(params.estimator.do_loop_closures && !estimator.isLoopClosing()
+  if(placeRecognition && params.estimator.do_loop_closures && !estimator.isLoopClosing()
       && !estimator.isLoopClosureAvailable()
       && !estimator.needsFullGraphOptimisation() && isInitialized_) {
     TimerSwitchable matchDBoWTimer("2.03 loop closure query");
@@ -1306,6 +1348,7 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
   // match
   int ctr = 0;
   std::vector<cv::Mat> descriptorPool(params.nCameraSystem.numCameras());
+  std::vector<cv::Mat> superPointPoolDistances(params.nCameraSystem.numCameras());
   kinematics::Transformation T_WS1 = estimator.pose(StateId(currentFrameId));
   double reprErr = 0.0;
   for (size_t im = 0; im < params.nCameraSystem.numCameras(); ++im) {
@@ -1338,8 +1381,11 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
 
     // go through all landmarks
     const size_t numDescriptorsToKeep = 3; // use only best 3
+    const size_t rowBytes = descriptorBytes();
+    const int descriptorCols = isSuperPointActive() ? 256 : 48;
+    const int descriptorType = isSuperPointActive() ? CV_16FC1 : CV_8UC1;
     descriptorPool[im] = cv::Mat(
-        int(numDescriptorsToKeep)*pointMap.size(), 48, CV_8UC1);
+        int(numDescriptorsToKeep)*pointMap.size(), descriptorCols, descriptorType);
     uchar* dataPtr = descriptorPool[im].data;
     for(MapPoints::const_iterator it = pointMap.begin(); it != pointMap.end(); ++it) {
       if(loopClosureLandmarksToUseExclusively) {
@@ -1384,7 +1430,8 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
       // obtain map point descriptor, and do some pruning.
       std::vector<double> bestScores(numDescriptorsToKeep, 1.0);
       landmarkToMatch.descriptors = cv::Mat(
-          int(numDescriptorsToKeep), 48, CV_8UC1, dataPtr);
+          int(numDescriptorsToKeep), descriptorCols, descriptorType, dataPtr);
+      landmarkToMatch.descriptorRow = int((dataPtr - descriptorPool[im].data) / rowBytes);
       landmarkToMatch.e_W.resize(3,numDescriptorsToKeep);
       landmarkToMatch.r_W.resize(3,numDescriptorsToKeep);
       landmarkToMatch.kids.reserve(numDescriptorsToKeep);
@@ -1443,9 +1490,9 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
           const MultiFramePtr oldFrame =
               estimator.multiFrame(StateId(kid.frameId));
           std::memcpy(
-              landmarkToMatch.descriptors.data+48*worstIdx,
+              landmarkToMatch.descriptors.data+rowBytes*worstIdx,
               oldFrame->keypointDescriptor(
-                  kid.cameraIndex, kid.keypointIndex), 48);
+                  kid.cameraIndex, kid.keypointIndex), rowBytes);
 
           // remember some other stuff for efficiency
           Eigen::Vector3d e_C;
@@ -1461,10 +1508,11 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
       }
 
       // crop unused bottom rows / right cols
-      landmarkToMatch.descriptors = landmarkToMatch.descriptors(cv::Rect(0, 0, 48, o + 1));
+      landmarkToMatch.descriptors =
+          landmarkToMatch.descriptors(cv::Rect(0, 0, descriptorCols, int(o + 1)));
       landmarkToMatch.e_W.conservativeResize(3,o + 1);
       landmarkToMatch.r_W.conservativeResize(3,o + 1);
-      dataPtr += (o + 1)*48;
+      dataPtr += (o + 1)*rowBytes;
 
       if(landmarkToMatch.descriptors.rows==0) {
         // no observations -- weird.
@@ -1481,10 +1529,20 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
     }
     landmarksToMatchVec[im] = landmarksToMatch;
 
+    // SuperPoint: score every keypoint against the whole used pool in one GEMM. The reprojection
+    // gate in the matching threads still decides which of these entries are looked at.
+    if (isSuperPointActive()) {
+      const int usedRows = int((dataPtr - descriptorPool[im].data) / rowBytes);
+      if (usedRows > 0 && numKeypoints > 0) {
+        superPointPoolDistances[im] = superPointDistances(
+            multiFrame->descriptors(im), descriptorPool[im].rowRange(0, usedRows));
+      }
+    }
+
     // multithreaded matching
     const size_t num_matching_threads = size_t(params.frontend.num_matching_threads);
 
-    std::vector<double> distances(numKeypoints,briskMatchingThreshold_);
+    std::vector<double> distances(numKeypoints,matchingThreshold());
     std::vector<LandmarkId> lmIds(numKeypoints);
     AlignedVector<Eigen::Vector4d> hps_W(numKeypoints, Eigen::Vector4d::Zero());
     std::vector<size_t> ctrs(num_matching_threads);
@@ -1498,7 +1556,8 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
               loopClosureLandmarksToUseExclusively, std::cref(T_WS1),
               std::cref(landmarksToMatch), numKeypoints,
               std::cref(pointMap), im, std::cref(multiFrame), std::ref(distances),
-              std::ref(lmIds), std::ref(hps_W), std::ref(ctrs), std::ref(reprErrors));
+              std::ref(lmIds), std::ref(hps_W), std::ref(ctrs), std::ref(reprErrors),
+              std::cref(superPointPoolDistances[im]));
     }
 
     for(size_t t = 0; t<num_matching_threads; ++t) {
@@ -1595,7 +1654,7 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
     // multithreaded matching
     const size_t num_matching_threads = size_t(params.frontend.num_matching_threads);
 
-    std::vector<double> distances(numKeypoints,briskMatchingThreshold_);
+    std::vector<double> distances(numKeypoints,matchingThreshold());
     std::vector<LandmarkId> lmIds(numKeypoints);
     AlignedVector<Eigen::Vector4d> hps_W(numKeypoints, Eigen::Vector4d::Zero());
     std::vector<size_t> ctrs(num_matching_threads);
@@ -1608,7 +1667,8 @@ int Frontend::matchToMap(Estimator &estimator, const okvis::ViParameters& params
               loopClosureLandmarksToUseExclusively, std::cref(T_WS1),
               std::cref(landmarksToMatchVec[im]), numKeypoints,
               std::cref(pointMap), im, std::cref(multiFrame), std::ref(distances),
-              std::ref(lmIds), std::ref(hps_W), std::ref(ctrs));
+              std::ref(lmIds), std::ref(hps_W), std::ref(ctrs),
+              std::cref(superPointPoolDistances[im]));
     }
 
     for(size_t t = 0; t<num_matching_threads; ++t) {
@@ -1724,7 +1784,7 @@ void Frontend::matchToMapByThread(
     size_t im, const MultiFramePtr&  multiFrame, std::vector<double>& distances,
     std::vector<LandmarkId>& lmIds, AlignedVector<Eigen::Vector4d>& hps_W,
     std::vector<size_t>& ctrs,
-    std::vector<double>& reprErrors) const {
+    std::vector<double>& reprErrors, const cv::Mat& superPointDistances) const {
 
   const kinematics::Transformation T_SC = *multiFrame->T_SC(im);
   const kinematics::Transformation T_WC1 = T_WS1 * T_SC;
@@ -1781,11 +1841,12 @@ void Frontend::matchToMapByThread(
         continue;
       }
 
-      const uchar* descriptorK = ddata + k*48;
+      const uchar* descriptorK = ddata + k*descriptorBytes();
       for(int d = 0; d<it->second.descriptors.rows; ++d) {
-        const double dist = brisk::Hamming::PopcntofXORed(
-            descriptorK,
-            it->second.descriptors.data + d*48, 3);
+        const double dist = superPointDistances.empty()
+            ? double(brisk::Hamming::PopcntofXORed(
+                  descriptorK, it->second.descriptors.data + d*48, 3))
+            : double(superPointDistances.at<float>(int(k), it->second.descriptorRow + d));
         if(dist < distances[k]) {
           distances[k] = dist;
           lmIds[k] = it->first;
@@ -1809,7 +1870,7 @@ void Frontend::matchToMapByThreadUnitialised(
     size_t numKeypoints, const MapPoints& pointMap,
     size_t im, const MultiFramePtr&  multiFrame, std::vector<double>& distances,
     std::vector<LandmarkId>& lmIds, AlignedVector<Eigen::Vector4d>& hps_W,
-    std::vector<size_t>& ctrs) const {
+    std::vector<size_t>& ctrs, const cv::Mat& superPointDistances) const {
 
   const kinematics::Transformation T_SC = *multiFrame->T_SC(im);
   const kinematics::Transformation T_WC1 = T_WS1 * T_SC;
@@ -1865,10 +1926,12 @@ void Frontend::matchToMapByThreadUnitialised(
 
       // also check epipolar distance (later)
       const Eigen::Vector3d e1_W=e_Ws.col(k);
-      const uchar* descriptorK = ddata + k*48;
+      const uchar* descriptorK = ddata + k*descriptorBytes();
       for(int d = 0; d<it->second.descriptors.rows; ++d) {
-        const double dist = brisk::Hamming::PopcntofXORed(
-            descriptorK, it->second.descriptors.data + d*48, 3);
+        const double dist = superPointDistances.empty()
+            ? double(brisk::Hamming::PopcntofXORed(
+                  descriptorK, it->second.descriptors.data + d*48, 3))
+            : double(superPointDistances.at<float>(int(k), it->second.descriptorRow + d));
 
         if(dist < distances[k]) {
 
@@ -1996,18 +2059,27 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
       // preprocess matchable set, get descriptors close in memory
       std::vector<size_t> k1s;
       k1s.reserve(k1Size);
-      cv::Mat desc1(k1Size, 48, CV_8UC1);
+      const bool superPoint = isSuperPointActive();
+      const size_t rowBytes = descriptorBytes();
+      const int descriptorCols = superPoint ? 256 : 48;
+      cv::Mat desc1(int(k1Size), descriptorCols, superPoint ? CV_16FC1 : CV_8UC1);
       for(size_t k1 = 0; k1 < k1Size; ++k1) {
         const uint64_t id1 = multiFrame1->landmarkId(im, k1);
         if(id1) {
           continue; // already matched
         }
         std::memcpy(
-            desc1.data+48*k1s.size(),
-            multiFrame1->keypointDescriptor(im, k1), 48);
+            desc1.data+rowBytes*k1s.size(),
+            multiFrame1->keypointDescriptor(im, k1), rowBytes);
         k1s.push_back(k1);
       }
-      desc1 = desc1(cv::Rect(0,0,48,k1s.size()));
+      desc1 = desc1(cv::Rect(0,0,descriptorCols,int(k1s.size())));
+
+      // SuperPoint: all frame-0 keypoints against all matchable frame-1 keypoints in one GEMM.
+      cv::Mat superPointDistances01;
+      if(superPoint && k0Size > 0 && !k1s.empty()) {
+        superPointDistances01 = superPointDistances(multiFrame0->descriptors(im), desc1);
+      }
 
       AlignedVector<MatchInfo> matchInfos(k0Size);
 
@@ -2016,7 +2088,7 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
       for (size_t t = 0; t < size_t(params.frontend.num_matching_threads); t++) {
         workers.push_back(std::thread([this, t, k0Size, im, &multiFrame0, &estimator, f0, k1s,
                                       &T_WC0, &T_WC1, &multiFrame1, &olderFrameId, &matchInfos,
-                                       &params, &camera, desc1]() {
+                                       &params, &camera, desc1, &superPointDistances01]() {
           for(size_t k0 = t; k0 < k0Size; k0 += size_t(params.frontend.num_matching_threads)) {
             uint64_t id0 = multiFrame0->landmarkId(im, k0);
             if(id0) {
@@ -2028,7 +2100,9 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
               }
             }
 
-            uint32_t distances = briskMatchingThreshold_;
+            // BRISK keeps its integer distance, truncation of the threshold included.
+            double distances = superPointDistances01.empty()
+                ? double(uint32_t(briskMatchingThreshold_)) : matchingThreshold();
             bool initialisable = false;
             double quality = 0.0;
             Eigen::Vector4d hps_W(0,0,0,0);
@@ -2051,8 +2125,9 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
 
             for(size_t kk = 0; kk < k1s.size(); ++kk) {
               const size_t k1 = k1s[kk];
-              const uint32_t dist = brisk::Hamming::PopcntofXORed(
-                  d0, desc1.data+kk*48, 3);
+              const double dist = superPointDistances01.empty()
+                  ? double(brisk::Hamming::PopcntofXORed(d0, desc1.data+kk*48, 3))
+                  : double(superPointDistances01.at<float>(int(k0), int(kk)));
               if(dist < distances) {
                 // it's a match!
 
@@ -2100,7 +2175,7 @@ int Frontend::matchMotionStereo(Estimator& estimator, const ViParameters &params
             }
 
             // add observations and initialise
-            if(distances < briskMatchingThreshold_) {
+            if(distances < matchingThreshold()) {
               Eigen::Vector2d pt1p;
               Eigen::Vector2d pt1;
               multiFrame1->getKeypoint(im, k1_max, pt1);
@@ -2219,17 +2294,27 @@ void Frontend::matchStereo(Estimator &estimator, std::shared_ptr<okvis::MultiFra
         const auto camera1 = multiFrame->geometryAs<CAMERA_GEOMETRY>(im1);
         const double f0 = 0.5* (camera0->focalLengthU() + camera0->focalLengthV());
         const double f1 = 0.5* (camera1->focalLengthU() + camera1->focalLengthV());
+
+        // SuperPoint: all camera-0 keypoints against all camera-1 keypoints in one GEMM.
+        cv::Mat superPointDistances01;
+        if(isSuperPointActive() && k0Size > 0 && k1Size > 0) {
+          superPointDistances01 = superPointDistances(multiFrame->descriptors(im0),
+                                                      multiFrame->descriptors(im1));
+        }
+
         for(size_t k0 = 0; k0 < k0Size; ++k0) {
 
-          double distances = briskMatchingThreshold_;
+          double distances = matchingThreshold();
           bool initialisable=  false;
           Eigen::Vector4d hps_W;
           size_t k1_match = 0;
 
           for(size_t k1 = 0; k1 < k1Size; ++k1) {
-            const auto dist = brisk::Hamming::PopcntofXORed(
-                multiFrame->keypointDescriptor(im0, k0),
-                  multiFrame->keypointDescriptor(im1, k1), 3);
+            const double dist = superPointDistances01.empty()
+                ? double(brisk::Hamming::PopcntofXORed(
+                      multiFrame->keypointDescriptor(im0, k0),
+                      multiFrame->keypointDescriptor(im1, k1), 3))
+                : double(superPointDistances01.at<float>(int(k0), int(k1)));
             if(dist < distances) {
               // it's a match!
               double size0, size1;
@@ -2278,7 +2363,7 @@ void Frontend::matchStereo(Estimator &estimator, std::shared_ptr<okvis::MultiFra
             }
           }
 
-          if(distances<briskMatchingThreshold_) {
+          if(distances<matchingThreshold()) {
             Eigen::Vector2d pt0, pt1;
             multiFrame->getKeypoint(im0, k0, pt0);
             multiFrame->getKeypoint(im1, k1_match, pt1);

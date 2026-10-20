@@ -72,3 +72,32 @@ TEST(Frame, functions)
   }
 }
 
+
+TEST(Frame, addressesFp16DescriptorRowsByBytes)
+{
+  // SuperPoint descriptors: 256 fp16 elements, i.e. 512 bytes per row.
+  okvis::Frame frame;
+  std::vector<cv::KeyPoint> keypoints(3, cv::KeyPoint(cv::Point2f(1.0f, 1.0f), 8.0f));
+  frame.resetKeypoints(keypoints);
+  cv::Mat descriptors(3, 256, CV_16F, cv::Scalar(0));
+  frame.resetDescriptors(descriptors);
+
+  EXPECT_EQ(frame.descriptorDim(), 256);
+  EXPECT_EQ(frame.descriptorType(), CV_16F);
+  EXPECT_EQ(frame.descriptors().data, descriptors.data);
+  EXPECT_EQ(frame.keypointDescriptor(1), descriptors.ptr<uchar>(1));
+  EXPECT_EQ(frame.keypointDescriptor(2), descriptors.ptr<uchar>(2));
+}
+
+TEST(Frame, addressesBriskDescriptorRowsAsBefore)
+{
+  okvis::Frame frame;
+  std::vector<cv::KeyPoint> keypoints(2, cv::KeyPoint(cv::Point2f(1.0f, 1.0f), 8.0f));
+  frame.resetKeypoints(keypoints);
+  cv::Mat descriptors(2, 48, CV_8UC1, cv::Scalar(0));
+  frame.resetDescriptors(descriptors);
+
+  EXPECT_EQ(frame.descriptorDim(), 48);
+  EXPECT_EQ(frame.descriptorType(), CV_8UC1);
+  EXPECT_EQ(frame.keypointDescriptor(1), descriptors.data + 48);
+}

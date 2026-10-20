@@ -32,6 +32,10 @@
 /// \brief okvis Main namespace of this package.
 namespace okvis {
 
+class SuperPointExtractor;
+class CublasMatcher;
+
+
 /**
  * @brief A frontend using BRISK features
  */
@@ -158,6 +162,21 @@ class Frontend : public ViFrontendInterface {
   ///@}
   /// @name Other getters
   /// @{
+
+  /**
+   * @brief Switch detection, description and matching to SuperPoint.
+   *
+   * Does nothing when parameters.engine is empty, which keeps the BRISK frontend. Otherwise loads
+   * one engine per camera and disables loop closure: the DBoW2 vocabulary is BRISK-only.
+   * @param parameters SuperPoint parameters.
+   * @param maxKeypoints Keypoint budget, shared with BRISK (frontend_parameters/max_num_keypoints).
+   */
+  void setSuperPointParameters(const SuperPointParameters & parameters, int maxKeypoints);
+
+  /// @brief Is the SuperPoint frontend in use (rather than BRISK)?
+  bool isSuperPointActive() const {
+    return !superPointExtractors_.empty();
+  }
 
   /// @brief Get the matching threshold.
   double getBriskMatchingThreshold() const {
@@ -424,6 +443,34 @@ private:
   /// \brief Classification network for keypoints (if enabled).
   std::vector<std::shared_ptr<Network>> networks_;
 
+  /// SuperPoint extractors, one per camera. Empty when the BRISK frontend is in use.
+  std::vector<std::shared_ptr<SuperPointExtractor>> superPointExtractors_;
+  /// cuBLAS matcher scoring SuperPoint descriptors. Null when the BRISK frontend is in use.
+  std::shared_ptr<CublasMatcher> cublasMatcher_;
+  /// Serialises access to cublasMatcher_, which is not thread safe.
+  mutable std::mutex cublasMatcherMutex_;
+  /// SuperPoint match acceptance as a distance (1 - minimum cosine similarity), so that all
+  /// matching code keeps BRISK's sense of comparison: lower is better.
+  double superPointMatchingDistance_ = 0.2;
+
+  /// @brief Matching acceptance threshold of whichever descriptor is in use (lower is better).
+  double matchingThreshold() const {
+    return isSuperPointActive() ? superPointMatchingDistance_ : briskMatchingThreshold_;
+  }
+
+  /// @brief Bytes per descriptor of whichever descriptor is in use.
+  size_t descriptorBytes() const {
+    return isSuperPointActive() ? 256 * sizeof(uint16_t) : 48;
+  }
+
+  /**
+   * @brief SuperPoint distances (1 - cosine similarity) of all query against all train rows.
+   * @param query CV_16F descriptors, one per row.
+   * @param train CV_16F descriptors, one per row.
+   * @return CV_32F, query.rows by train.rows.
+   */
+  cv::Mat superPointDistances(const cv::Mat & query, const cv::Mat & train) const;
+
   /**
    * @brief Match the frames to older, co-visible frames and triangulate.
    * @tparam CAMERA_GEOMETRY The camera geometry type to use.
@@ -448,6 +495,7 @@ private:
     bool is3d = false; ///< Determine whether treated as 3D initialised.
     Eigen::Vector2d projection; ///< 2D projection location in pixels.
     bool ignore = false; ///< Ignore if classified as sky / person.
+    int descriptorRow = 0; ///< Row of descriptors' first entry in the descriptor pool.
   };
 
   /**
@@ -470,6 +518,7 @@ private:
    * @param[out] hps_W matched landmarks (homogeneous) positions.
    * @param[out] ctrs Number of matches (by im).
    * @param[out] reprErrs Reprojection errors (by im).
+   * @param superPointDistances SuperPoint keypoint-by-pool-row distances; empty for BRISK.
    */
   template<class CAMERA_GEOMETRY>
   void matchToMapByThread(
@@ -482,7 +531,7 @@ private:
       const MapPoints& pointMap, size_t im, const MultiFramePtr&  multiFrame,
       std::vector<double>& distances, std::vector<LandmarkId>& lmIds,
       AlignedVector<Eigen::Vector4d>& hps_W, std::vector<size_t>& ctrs,
-      std::vector<double>& reprErrs) const;
+      std::vector<double>& reprErrs, const cv::Mat& superPointDistances) const;
 
   /**
    * @brief Parallelisable sub-part of matchToMap -- unitialised points.
@@ -503,6 +552,7 @@ private:
    * @param[out] lmIds matched landmark IDs.
    * @param[out] hps_W matched landmarks (homogeneous) positions.
    * @param[out] ctrs Number of matches (by im).
+   * @param superPointDistances SuperPoint keypoint-by-pool-row distances; empty for BRISK.
    */
   template<class CAMERA_GEOMETRY>
   void matchToMapByThreadUnitialised(
@@ -514,7 +564,8 @@ private:
       size_t numKeypoints,
       const MapPoints& pointMap, size_t im, const MultiFramePtr&  multiFrame,
       std::vector<double>& distances, std::vector<LandmarkId>& lmIds,
-      AlignedVector<Eigen::Vector4d>& hps_W, std::vector<size_t>& ctrs) const;
+      AlignedVector<Eigen::Vector4d>& hps_W, std::vector<size_t>& ctrs,
+      const cv::Mat& superPointDistances) const;
 
   std::atomic_bool trackingLost_; ///< Is the tracking currently lost?
 
