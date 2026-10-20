@@ -113,12 +113,12 @@ int main(int argc, char **argv)
                           parameters.camera.sync_cameras, deltaT, parameters.gps));
   }
 
-  // also check DBoW2 vocabulary
+  // also check the DBoW vocabulary
   boost::filesystem::path executable(argv[0]);
   std::string dBowVocDir = executable.remove_filename().string();
   std::ifstream infile(dBowVocDir+"/small_voc.yml.gz");
   if(!infile.good()) {
-     LOG(ERROR)<<"DBoW2 vocaublary " << dBowVocDir << "/small_voc.yml.gz not found.";
+     LOG(ERROR)<<"DBoW vocabulary " << dBowVocDir << "/small_voc.yml.gz not found.";
      return EXIT_FAILURE;
   }
 

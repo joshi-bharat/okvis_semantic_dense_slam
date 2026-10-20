@@ -5,8 +5,9 @@ find_package(Glog REQUIRED)
 if(USE_SYSTEM_BRISK)
   find_package(brisk REQUIRED)
 endif()
-if(USE_SYSTEM_DBOW2)
-  find_package(DBoW2 REQUIRED)
+if(USE_SYSTEM_DBOW3)
+  find_package(DBoW3 REQUIRED)
+  set(DBoW3_LIBRARIES ${DBoW3_LIBS}) # upstream DBoW3Config.cmake name
 endif()
 if(USE_SYSTEM_CERES)
   find_package(Ceres REQUIRED)
@@ -17,7 +18,6 @@ endif()
 
 set(LIB_NAME okvis_frontend)
 add_library(${LIB_NAME}
-  include/DBoW2/FBrisk.hpp
   include/okvis/triangulation/stereo_triangulation.hpp
   include/opengv/absolute_pose/FrameNoncentralAbsoluteAdapter.hpp
   include/opengv/absolute_pose/LoopclosureNoncentralAbsoluteAdapter.hpp
@@ -29,7 +29,6 @@ add_library(${LIB_NAME}
   include/okvis/SuperPointNms.hpp
   include/okvis/SuperPointSparse.hpp
   include/okvis/SuperPointMatchFilter.hpp
-  src/FBrisk.cpp
   src/SuperPointDescriptors.cpp
   src/SuperPointNms.cpp
   src/SuperPointSparse.cpp
@@ -45,7 +44,6 @@ target_include_directories(${LIB_NAME}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
-    ${DBoW2_INCLUDE_DIRS}
     ${GLOG_INCLUDE_DIRS}
     ${OPENGV_INCLUDE_DIRS}
     ${TORCH_INCLUDE_DIRS}
@@ -59,7 +57,7 @@ target_link_libraries(${LIB_NAME}
     okvis::Timing
     okvis::Util
     brisk::brisk
-    ${DBoW2_LIBRARIES}
+    ${DBoW3_LIBRARIES}
   PRIVATE
     ${GLOG_LIBRARIES}
     ${OPENGV_LIBRARIES}
@@ -96,7 +94,7 @@ if(USE_TENSORRT)
 endif()
 add_library(okvis::Frontend ALIAS ${LIB_NAME})
 
-# the DBoW2 pre-built vocabulary
+# the pre-built BRISK vocabulary (DBoW2 yml format, which DBoW3 reads)
 add_custom_command(TARGET ${LIB_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy
           ${CMAKE_CURRENT_SOURCE_DIR}/../resources/small_voc.yml.gz

@@ -167,7 +167,7 @@ class Frontend : public ViFrontendInterface {
    * @brief Switch detection, description and matching to SuperPoint.
    *
    * Does nothing when parameters.engine is empty, which keeps the BRISK frontend. Otherwise loads
-   * one engine per camera and disables loop closure: the DBoW2 vocabulary is BRISK-only.
+   * one engine per camera and disables loop closure: the DBoW vocabulary is BRISK-only.
    * @param parameters SuperPoint parameters.
    * @param maxKeypoints Keypoint budget, shared with BRISK (frontend_parameters/max_num_keypoints).
    */
@@ -367,7 +367,7 @@ private:
    * @return Number of matching keyframes.
    */
   int getFilteredDBoWResult(const std::unique_ptr<DBoW> &dBow,
-                            const std::vector<std::vector<uchar>> &features,
+                            const cv::Mat &features,
                             std::vector<std::pair<StateId, double>> &stateIds) const;
 
   /**

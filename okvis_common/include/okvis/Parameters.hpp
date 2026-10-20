@@ -202,7 +202,7 @@ struct TensorRtParameters {
  * \brief SuperPoint frontend parameters (frontend_parameters in the config file).
  *
  * An empty engine selects the BRISK frontend, which is the default. With an engine set, keypoints
- * and descriptors come from SuperPoint and loop closure is disabled: the DBoW2 vocabulary and
+ * and descriptors come from SuperPoint and loop closure is disabled: the DBoW vocabulary and
  * FBrisk are specific to 48-byte binary descriptors.
  */
 struct SuperPointParameters {

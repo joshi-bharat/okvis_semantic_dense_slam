@@ -1,19 +1,18 @@
 /**
- * @file dbow2_test.cpp
- * @brief Testing/generating DBoW2 vocabulary.
+ * @file dbow3_test.cpp
+ * @brief Testing/generating the DBoW3 BRISK vocabulary.
  *
- * License: BSD, see https://github.com/dorian3d/DBoW2/blob/master/LICENSE.txt
+ * License: BSD, see https://github.com/rmsalinas/DBow3/blob/master/LICENSE.txt
  * @author Dorian Galvez-Lopez
  * @author Stefan Leutenegger
  *
  */
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
 
-// DBoW2
-#include <DBoW2/DBoW2.h> // defines Surf64Vocabulary and Surf64Database
-#include <DBoW2/FBrisk.hpp>
+#include <DBoW3/DBoW3.h>
 
 #include <boost/filesystem.hpp>
 
@@ -24,46 +23,26 @@
 // BRISK
 #include <brisk/brisk.h>
 
-using namespace DBoW2;
-//using namespace DUtils;
 using namespace std;
 
-/// \brief BRISK vocabulary.
-typedef DBoW2::TemplatedVocabulary<DBoW2::FBrisk::TDescriptor, DBoW2::FBrisk>
-  FBriskVocabulary;
-
-/// \brief BRISK database.
-typedef DBoW2::TemplatedDatabase<DBoW2::FBrisk::TDescriptor, DBoW2::FBrisk>
-  FBriskDatabase;
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-/// \brief Load features from path.
+/// \brief Load features from path: one CV_8U matrix of 48-byte BRISK descriptors per image.
 /// \param path Path.
 /// @param[out] features The loaded features.
-void loadFeatures(const string &path, vector<vector<vector<unsigned char> > > &features);
-
-/// \brief Convert data structure.
-/// \param mat cv::Mat format.
-/// @param[out] out DBoW format.
-/// @param[in] L No. descriptor bytes.
-void changeStructure(const cv::Mat &mat, vector<vector<unsigned char> > &out,
-  int L);
+void loadFeatures(const string &path, vector<cv::Mat> &features);
 
 /// \brief Test vocabulary creation.
 /// \param features Features.
-void testVocCreation(const vector<vector<vector<unsigned char> > > &features);
+void testVocCreation(const vector<cv::Mat> &features);
 
 /// \brief Test database.
 /// \param features Features.
-void testDatabase(const vector<vector<vector<unsigned char> > > &features);
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-const int NIMAGES = 4; ///< number of training images
+void testDatabase(const vector<cv::Mat> &features);
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+const size_t NIMAGES = 4; ///< number of images matched against each other in the tests
 
 // ----------------------------------------------------------------------------
 
@@ -80,7 +59,7 @@ int main(int argc, char **argv)
 
   std::string path(argv[1]);
 
-  vector<vector<vector<unsigned char> > > features;
+  vector<cv::Mat> features;
   loadFeatures(path, features);
 
   testVocCreation(features);
@@ -92,10 +71,9 @@ int main(int argc, char **argv)
 
 // ----------------------------------------------------------------------------
 
-void loadFeatures(const string &path, vector<vector<vector<unsigned char> > > &features)
+void loadFeatures(const string &path, vector<cv::Mat> &features)
 {
   features.clear();
-  features.reserve(NIMAGES);
 
   brisk::ScaleSpaceFeatureDetector<brisk::HarrisScoreCalculator> briskDetector(36, 0, 100,700);
   brisk::BriskDescriptorExtractor briskDescriptorExtractor(false, false);
@@ -119,8 +97,7 @@ void loadFeatures(const string &path, vector<vector<vector<unsigned char> > > &f
       briskDetector.detect(image,keypoints);
       briskDescriptorExtractor.compute(image,keypoints,descriptors);
 
-      features.push_back(vector<vector<unsigned char> >());
-      changeStructure(descriptors, features.back(), 48);
+      features.push_back(descriptors);
 
       ctr++;
     }
@@ -130,30 +107,15 @@ void loadFeatures(const string &path, vector<vector<vector<unsigned char> > > &f
 
 // ----------------------------------------------------------------------------
 
-void changeStructure(const cv::Mat& mat, vector<vector<unsigned char> > &out,
-  int L)
-{
-  out.resize(size_t(mat.rows));
-
-  unsigned int j = 0;
-  for(int i = 0; i < mat.rows*mat.cols; i += L, ++j)
-  {
-    out[j].resize(size_t(L));
-    std::copy(mat.data + i, mat.data + i + L, out[j].begin());
-  }
-}
-
-// ----------------------------------------------------------------------------
-
-void testVocCreation(const vector<vector<vector<unsigned char> > > &features)
+void testVocCreation(const vector<cv::Mat> &features)
 {
   // branching factor and depth levels
   const int k = 9;
   const int L = 3;
-  const WeightingType weight = TF_IDF;
-  const ScoringType score = L1_NORM;
+  const DBoW3::WeightingType weight = DBoW3::TF_IDF;
+  const DBoW3::ScoringType score = DBoW3::L1_NORM;
 
-  FBriskVocabulary voc(k, L, weight, score);
+  DBoW3::Vocabulary voc(k, L, weight, score);
 
   cout << "Creating a small " << k << "^" << L << " vocabulary..." << endl;
   voc.create(features);
@@ -164,11 +126,12 @@ void testVocCreation(const vector<vector<vector<unsigned char> > > &features)
 
   // lets do something with this vocabulary
   cout << "Matching images against themselves (0 low, 1 high): " << endl;
-  BowVector v1, v2;
-  for(size_t i = 0; i < NIMAGES; i++)
+  DBoW3::BowVector v1, v2;
+  const size_t n = std::min(NIMAGES, features.size());
+  for(size_t i = 0; i < n; i++)
   {
     voc.transform(features[i], v1);
-    for(size_t j = 0; j < NIMAGES; j++)
+    for(size_t j = 0; j < n; j++)
     {
       voc.transform(features[j], v2);
 
@@ -177,29 +140,30 @@ void testVocCreation(const vector<vector<vector<unsigned char> > > &features)
     }
   }
 
-  // save the vocabulary to disk
+  // save the vocabulary to disk, as text (yml) so it stays readable and DBoW2-compatible
   cout << endl << "Saving vocabulary..." << endl;
-  voc.save("small_voc.yml.gz");
+  voc.save("small_voc.yml.gz", false);
   cout << "Done" << endl;
 }
 
 // ----------------------------------------------------------------------------
 
-void testDatabase(const vector<vector<vector<unsigned char> > > &features)
+void testDatabase(const vector<cv::Mat> &features)
 {
   cout << "Creating a small database..." << endl;
 
   // load the vocabulary from disk
-  FBriskVocabulary voc("small_voc.yml.gz");
+  DBoW3::Vocabulary voc("small_voc.yml.gz");
 
-  FBriskDatabase db(voc, false, 0); // false = do not use direct index
+  DBoW3::Database db(voc, false, 0); // false = do not use direct index
   // (so ignore the last param)
   // The direct index is useful if we want to retrieve the features that
   // belong to some vocabulary node.
   // db creates a copy of the vocabulary, we may get rid of "voc" now
 
   // add images to the database
-  for(size_t i = 0; i < NIMAGES; i++)
+  const size_t n = std::min(NIMAGES, features.size());
+  for(size_t i = 0; i < n; i++)
   {
     db.add(features[i]);
   }
@@ -211,8 +175,8 @@ void testDatabase(const vector<vector<vector<unsigned char> > > &features)
   // and query the database
   cout << "Querying the database: " << endl;
 
-  QueryResults ret;
-  for(size_t i = 0; i < NIMAGES; i++)
+  DBoW3::QueryResults ret;
+  for(size_t i = 0; i < n; i++)
   {
     db.query(features[i], ret, 4);
 
@@ -232,10 +196,6 @@ void testDatabase(const vector<vector<vector<unsigned char> > > &features)
 
   // once saved, we can load it again
   cout << "Retrieving database once again..." << endl;
-  FBriskDatabase db2("small_db.yml.gz");
+  DBoW3::Database db2("small_db.yml.gz");
   cout << "... done! This is: " << endl << db2 << endl;
 }
-
-// ----------------------------------------------------------------------------
-
-

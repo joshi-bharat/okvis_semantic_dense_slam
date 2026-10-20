@@ -92,7 +92,7 @@ int main(int argc, char **argv)
   }
   
 
-  // also check DBoW2 vocabulary
+  // also check the DBoW vocabulary
   boost::filesystem::path executable(argv[0]);
   std::string dBowVocDir = executable.remove_filename().string();
   std::ifstream infile(dBowVocDir+"/small_voc.yml.gz");

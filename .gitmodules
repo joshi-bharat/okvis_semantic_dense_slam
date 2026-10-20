@@ -4,9 +4,6 @@
 [submodule "external/brisk"]
 	path = external/brisk
 	url = https://github.com/smartroboticslab/brisk
-[submodule "external/DBoW2"]
-	path = external/DBoW2
-	url = https://github.com/dorian3d/DBoW2.git
 [submodule "external/opengv"]
 	path = external/opengv
 	url = https://github.com/laurentkneip/opengv
@@ -16,3 +13,6 @@
 [submodule "supereight2"]
 	path = supereight2
 	url = git@github.com:ethz-mrl/supereight2.git
+[submodule "external/DBoW3"]
+	path = external/DBoW3
+	url = https://github.com/rmsalinas/DBow3

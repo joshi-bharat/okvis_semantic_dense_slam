@@ -4,8 +4,8 @@ project(okvis VERSION 2.0.0 LANGUAGES CXX C)
 # options for build configuration
 option (USE_SYSTEM_BRISK
         "Use brisk via find_package rather than downloading it as part of okvis" OFF)
-option (USE_SYSTEM_DBOW2
-        "Use DBoW2 via find_package rather than downloading it as part of okvis" OFF)
+option (USE_SYSTEM_DBOW3
+        "Use DBoW3 via find_package rather than downloading it as part of okvis" OFF)
 option (USE_SYSTEM_CERES
         "Use ceres via find_package rather than downloading it as part of okvis" OFF)
 option (BUILD_APPS
@@ -38,7 +38,7 @@ set(RERUN_SDK_URL "https://build.rerun.io/commit/b08c599/rerun_cpp_sdk.zip"
     CACHE STRING "Rerun C++ SDK zip (0.38.1)")
 
 # C++20 throughout: LibTorch >= 2.14 refuses to compile as C++17. Set globally as well as on the
-# okvis targets so the vendored subprojects (ceres, supereight2, brisk, DBoW2, ...) match and the
+# okvis targets so the vendored subprojects (ceres, supereight2, brisk, DBoW3, ...) match and the
 # ABI stays consistent across the whole build.
 set(OKVIS_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD ${OKVIS_CXX_STANDARD})
@@ -321,22 +321,19 @@ if(BUILD_APPS)
   if(USE_SYSTEM_BRISK)
     find_package(brisk REQUIRED)
   endif()
-  if(USE_SYSTEM_DBOW2)
-    find_package(DBoW2 REQUIRED)
+  if(USE_SYSTEM_DBOW3)
+    find_package(DBoW3 REQUIRED)
   endif()
   
-  # DBoW2 test app
-  add_executable(dbow2_test okvis_apps/src/dbow2_test.cpp)
-  target_include_directories(dbow2_test
-    PRIVATE
-      ${DBoW2_INCLUDE_DIRS}
-  )
-  target_link_libraries(dbow2_test PRIVATE
+  # DBoW3 vocabulary test app
+  add_executable(dbow3_test okvis_apps/src/dbow3_test.cpp)
+  target_link_libraries(dbow3_test PRIVATE
     ${OpenCV_LIBS}
     Boost::filesystem
     okvis::Frontend
+    ${DBoW3_LIBRARIES}
   )
-  target_compile_options(dbow2_test
+  target_compile_options(dbow3_test
     PUBLIC
       ${OKVIS_PUBLIC_CXX_FLAGS}
     PRIVATE

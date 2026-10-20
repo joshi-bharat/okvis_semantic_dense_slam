@@ -30,12 +30,11 @@
 
 #include <glog/logging.h>
 
-// DBoW2
+// DBoW3
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
-#include <DBoW2/DBoW2.h>
+#include <DBoW3/DBoW3.h>
 #pragma GCC diagnostic pop
-#include <DBoW2/FBrisk.hpp>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -90,6 +89,24 @@ namespace okvis {
 static const double kptrad = 0.09;
 //cv::Ptr<cv::CLAHE> mClahe;
 
+namespace {
+/// \brief All cameras' descriptors of a multiframe stacked into one matrix, one row per keypoint,
+///        in keypoint order, as DBoW3 takes them.
+cv::Mat placeRecognitionFeatures(const MultiFrame& multiFrame, size_t numCameras) {
+  std::vector<cv::Mat> blocks;
+  for (size_t im = 0; im < numCameras; ++im) {
+    if (multiFrame.numKeypoints(im) > 0) {
+      blocks.push_back(multiFrame.descriptors(im).rowRange(0, int(multiFrame.numKeypoints(im))));
+    }
+  }
+  cv::Mat features;
+  if (!blocks.empty()) {
+    cv::vconcat(blocks, features);
+  }
+  return features;
+}
+} // namespace
+
 /// \brief Opaque stuct to use DBoW for loop closure.
 class Frontend::DBoW {
  public:
@@ -103,16 +120,26 @@ class Frontend::DBoW {
   }
   /// \brief Constructor with Vocabulary.
   /// \param dBowVoc Vocabulary.
-  DBoW(const DBoW2::TemplatedVocabulary<DBoW2::FBrisk::TDescriptor, DBoW2::FBrisk>& dBowVoc)
+  DBoW(const DBoW3::Vocabulary& dBowVoc)
       : vocabulary(dBowVoc),
       // false = do not use direct index.
       database(vocabulary, false, 0)
   {
   }
 
-  DBoW2::TemplatedVocabulary<DBoW2::FBrisk::TDescriptor, DBoW2::FBrisk> vocabulary; ///< BRISK Voc.
-  DBoW2::TemplatedDatabase<DBoW2::FBrisk::TDescriptor, DBoW2::FBrisk> database; ///< BRISK Database.
+  DBoW3::Vocabulary vocabulary; ///< BRISK Voc.
+  DBoW3::Database database; ///< BRISK Database.
   std::vector<uint64> poseIds; ///< The multiframe IDs corresponding to the dBow ones.
+
+  /// \brief Add a frame's features, one descriptor per row. Every frame gets an entry, so that
+  ///        database entry ids stay aligned with poseIds.
+  void add(const cv::Mat& features) {
+    if (features.empty()) {
+      database.add(DBoW3::BowVector());
+    } else {
+      database.add(features);
+    }
+  }
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
@@ -187,21 +214,8 @@ bool Frontend::loadComponent(std::string filename,
 
   // fill component DBoW
   for (const auto &multiFrame : components_.back().multiFrames_) {
-    // first get features
-    std::vector<std::vector<uchar>> features(multiFrame.second->numKeypoints());
-    int offset = 0;
-    for (size_t im = 0; im < numCameras_; ++im) {
-      for (size_t k = 0; k < multiFrame.second->numKeypoints(im); ++k) {
-        features.at(k + offset).resize(48); // TODO: get 48 from feature
-        memcpy(features.at(k + offset).data(),
-               multiFrame.second->keypointDescriptor(im, k),
-               48 * sizeof(uchar));
-
-      }
-      offset += multiFrame.second->numKeypoints(im);
-    }
-    // ... and add:
-    componentDBows_.back()->database.add(features);
+    // first get features, and add them
+    componentDBows_.back()->add(placeRecognitionFeatures(*multiFrame.second, numCameras_));
     componentDBows_.back()->poseIds.push_back(multiFrame.second->id());
   }
 
@@ -650,16 +664,18 @@ bool Frontend::verifyRecognisedPlace(const Estimator &estimator,
 
 // filtered DBoW query result
 int Frontend::getFilteredDBoWResult(const std::unique_ptr<DBoW> &dBow,
-                                    const std::vector<std::vector<uchar>> &features,
+                                    const cv::Mat &features,
                                     std::vector<std::pair<StateId, double>> &stateIds) const
 {
-  DBoW2::QueryResults dBoWResult;
-  dBow->database.query(features, dBoWResult, -1); // get all matches
-  DBoW2::QueryResults dBoWResultOrig = dBoWResult;
+  DBoW3::QueryResults dBoWResult;
+  if (!features.empty()) {
+    dBow->database.query(features, dBoWResult, -1); // get all matches
+  }
+  DBoW3::QueryResults dBoWResultOrig = dBoWResult;
   // sort ascending -- we want to match oldest...
   std::sort(dBoWResult.begin(),
             dBoWResult.end(),
-            [](const DBoW2::Result &lhs, const DBoW2::Result &rhs) { return lhs.Id < rhs.Id; });
+            [](const DBoW3::Result &lhs, const DBoW3::Result &rhs) { return lhs.Id < rhs.Id; });
 
   // nonmax suppression
   std::set<uint64_t> ids;
@@ -836,18 +852,9 @@ bool Frontend::dataAssociationAndInitialization(
 
   // prepare features for place recognition (BRISK only: the vocabulary is 48-byte binary)
   const bool placeRecognition = !isSuperPointActive();
-  std::vector<std::vector<uchar>> features(placeRecognition ? framesInOut->numKeypoints() : 0);
   // first, we are trying to match the database for loop closures
-  int offset = 0;
-  for (size_t im = 0; im < numCameras_ && placeRecognition; ++im) {
-    for (size_t k = 0; k < framesInOut->numKeypoints(im); ++k) {
-      features.at(k + offset).resize(48); // TODO: get 48 from feature
-      memcpy(features.at(k + offset).data(),
-             framesInOut->keypointDescriptor(im, k),
-             48 * sizeof(uchar));
-    }
-    offset += framesInOut->numKeypoints(im);
-  }
+  const cv::Mat features =
+      placeRecognition ? placeRecognitionFeatures(*framesInOut, numCameras_) : cv::Mat();
 
   /*MULTI-SESSION AND MULTI-AGENT*/
   if (placeRecognition && !estimator.isLoopClosing() && !estimator.isLoopClosureAvailable()
@@ -1004,7 +1011,7 @@ bool Frontend::dataAssociationAndInitialization(
     }
     // if keyframe, we add to relocalisation database
     if(*asKeyframe && !kfPrior) {
-      dBow_->database.add(features);
+      dBow_->add(features);
       dBow_->poseIds.push_back(framesInOut->id());
     }
   }

@@ -15,13 +15,12 @@ if(NOT USE_SYSTEM_BRISK)
   add_subdirectory(brisk)
 endif()
 
-if(NOT USE_SYSTEM_DBOW2)
-  # Use a modified CMakeLists.txt for DBoW2 to allow building as a static
-  # library and to fix issues when installing it along with okvis.
-  copy_if_exists(${CMAKE_CURRENT_SOURCE_DIR}/patches/DBoW2/CMakeLists.txt ${CMAKE_CURRENT_SOURCE_DIR}/DBoW2/CMakeLists.txt)
-  option(BUILD_Demo OFF)
-  add_subdirectory(DBoW2)
-  set(DBoW2_LIBRARIES DBoW2 PARENT_SCOPE)
+if(NOT USE_SYSTEM_DBOW3)
+  # Use a modified CMakeLists.txt for DBoW3 to build it as a static library with
+  # <DBoW3/...> headers and to install it along with okvis.
+  copy_if_exists(${CMAKE_CURRENT_SOURCE_DIR}/patches/DBoW3/CMakeLists.txt ${CMAKE_CURRENT_SOURCE_DIR}/DBoW3/CMakeLists.txt)
+  add_subdirectory(DBoW3)
+  set(DBoW3_LIBRARIES DBoW3 PARENT_SCOPE)
 endif()
 
 if(NOT USE_SYSTEM_CERES)
