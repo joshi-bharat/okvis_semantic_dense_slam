@@ -308,10 +308,14 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
     if (frontendNode["superpoint_matching_threshold"].isReal()) {
       sp.matching_threshold = double(frontendNode["superpoint_matching_threshold"]);
     }
+    if (frontendNode["superpoint_max_num_keypoints"].isInt()) {
+      sp.max_num_keypoints = int(frontendNode["superpoint_max_num_keypoints"]);
+    }
     if (!sp.engine.empty()) {
       LOG(INFO) << "SuperPoint frontend: engine=" << sp.engine << ", threshold=" << sp.threshold
                 << ", nms_radius=" << sp.nms_radius
-                << ", matching_threshold=" << sp.matching_threshold;
+                << ", matching_threshold=" << sp.matching_threshold
+                << ", max_num_keypoints=" << sp.max_num_keypoints;
       LOG(WARNING) << "SuperPoint frontend active: loop closure is DISABLED.";
     }
   }
