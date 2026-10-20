@@ -84,6 +84,8 @@ if(USE_TENSORRT)
   target_sources(${LIB_NAME} PRIVATE
     include/okvis/CublasMatcher.hpp
     src/CublasMatcher.cpp
+    include/okvis/SuperPointExtractor.hpp
+    src/SuperPointExtractor.cpp
   )
   target_link_libraries(${LIB_NAME} PUBLIC okvis::TensorRt PRIVATE CUDA::cublas)
   target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_SUPERPOINT)
@@ -124,7 +126,7 @@ if(BUILD_TESTS)
     test/TestSuperPointDescriptors.cpp
   )
   if(USE_TENSORRT)
-    target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp)
+    target_sources(${PROJECT_TEST_NAME} PRIVATE test/TestCublasMatcher.cpp test/TestSuperPointExtractor.cpp)
   endif()
   target_link_libraries(${PROJECT_TEST_NAME}
     ${LIB_NAME}
