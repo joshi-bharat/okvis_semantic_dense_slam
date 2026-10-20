@@ -146,12 +146,12 @@ int main(int argc, char **argv)
   if(parameters.camera.online_calibration.do_extrinsics) {
     mode = mode+"-calib";
   }
-  estimator->setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final_trajectory.csv");
+  estimator->setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final_trajectory_tum.txt", true); // TUM format
   estimator->setMapCsvFile(savePath+"/okvis2-" + mode + "-final_map.csv");
 
   // Setup the trajectory output writer
   std::shared_ptr<okvis::TrajectoryOutput> writer;
-  writer.reset(new okvis::TrajectoryOutput(savePath+"/okvis2-" + mode + "_trajectory.csv", false, parameters.output.display_topview));
+  writer.reset(new okvis::TrajectoryOutput(savePath+"/okvis2-" + mode + "_trajectory_tum.txt", true, parameters.output.display_topview));
 
   if (isSubmapping) {
     // Set callbacks in the estimator
@@ -287,7 +287,7 @@ int main(int argc, char **argv)
               if(parameters.estimator.do_final_ba) {
                 LOG(INFO) << "final full BA...";
                 estimator->doFinalBa();
-                estimator->setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final-ba_trajectory.csv");
+                estimator->setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final-ba_trajectory_tum.txt", true); // TUM format
                 estimator->writeFinalTrajectoryCsv();
 
                 // Wait until the other processor finishes again from the finalBA stateUpdate callback.

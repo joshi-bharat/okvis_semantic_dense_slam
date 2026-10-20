@@ -5,7 +5,8 @@ Usage:
     python3 tools/eval_tum_vie.py <sequence-folder> <results-folder> [--out <folder>]
 
 <sequence-folder> must contain mocap_data.txt (t[us] px py pz qx qy qz qw).
-Every okvis2-*trajectory.csv in <results-folder> is evaluated.
+Every okvis2-*trajectory_tum.txt (TUM format) or okvis2-*trajectory.csv in <results-folder> is
+evaluated.
 
 Mocap only sees the rig inside the tracking volume, so ground truth is split into segments.
 Two alignments are reported:
@@ -28,8 +29,11 @@ MAX_GT_GAP = 0.05  # [s] only interpolate ground truth across gaps shorter than 
 
 
 def load_okvis(path):
-    a = np.genfromtxt(path, delimiter=",", skip_header=1)[:, :8]
-    return a[:, 0] * 1e-9, a[:, 1:4], Rotation.from_quat(a[:, 4:8])
+    if path.endswith(".csv"):  # OKVIS CSV: t[ns], p, q, ...
+        a = np.genfromtxt(path, delimiter=",", skip_header=1)[:, :8]
+        return a[:, 0] * 1e-9, a[:, 1:4], Rotation.from_quat(a[:, 4:8])
+    a = np.loadtxt(path)  # TUM: t[s] tx ty tz qx qy qz qw, '#' header
+    return a[:, 0], a[:, 1:4], Rotation.from_quat(a[:, 4:8])
 
 
 def load_mocap(path):
@@ -191,11 +195,12 @@ def main():
     out_dir = args.out or os.path.join(args.results, "eval")
     os.makedirs(out_dir, exist_ok=True)
 
-    files = sorted(glob.glob(os.path.join(args.results, "okvis2-*trajectory.csv")))
+    files = sorted(glob.glob(os.path.join(args.results, "okvis2-*trajectory_tum.txt"))
+                   + glob.glob(os.path.join(args.results, "okvis2-*trajectory.csv")))
     if not files:
-        raise SystemExit(f"no okvis2-*trajectory.csv in {args.results}")
+        raise SystemExit(f"no okvis2-*trajectory_tum.txt or okvis2-*trajectory.csv in {args.results}")
     for f in files:
-        name = os.path.basename(f)[:-4]
+        name = os.path.splitext(os.path.basename(f))[0]
         evaluate(name, *load_okvis(f), t_gt, p_gt, R_gt, out_dir, not args.no_plot)
 
 

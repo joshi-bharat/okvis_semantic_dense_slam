@@ -134,13 +134,13 @@ int main(int argc, char **argv)
     mode = mode+"-calib";
   }
 
-  const bool isWriteRpg = false;
-  okvis::TrajectoryOutput writer(savePath+"/okvis2-" + mode + "_trajectory.csv", isWriteRpg, parameters.output.display_topview);
+  const bool isWriteRpg = true; // TUM format: timestamp [s] tx ty tz qx qy qz qw
+  okvis::TrajectoryOutput writer(savePath+"/okvis2-" + mode + "_trajectory_tum.txt", isWriteRpg, parameters.output.display_topview);
   estimator.setOptimisedGraphCallback(
         std::bind(&okvis::TrajectoryOutput::processState, &writer,
                   std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
                   std::placeholders::_4));
-  estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final_trajectory.csv", isWriteRpg);
+  estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final_trajectory_tum.txt", isWriteRpg);
   estimator.setMapCsvFile(savePath+"/okvis2-" + mode + "-final_map.csv");
 
   // connect reader to estimator
@@ -197,7 +197,7 @@ int main(int argc, char **argv)
       if(parameters.gps){
         estimator.writeGlobalTrajectoryCsv(savePath+"/okvis2-" + mode + "-global-final_trajectory.csv");
       }
-      estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final-ba_trajectory.csv", isWriteRpg);
+      estimator.setFinalTrajectoryCsvFile(savePath+"/okvis2-" + mode + "-final-ba_trajectory_tum.txt", isWriteRpg);
       if(parameters.estimator.do_final_ba) {
         LOG(INFO) << "final full BA...";
         cv::Mat topView;
