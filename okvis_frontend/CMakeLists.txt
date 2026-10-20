@@ -85,7 +85,7 @@ if(USE_TENSORRT)
     include/okvis/CublasMatcher.hpp
     src/CublasMatcher.cpp
   )
-  target_link_libraries(${LIB_NAME} PRIVATE CUDA::cublas CUDA::cudart)
+  target_link_libraries(${LIB_NAME} PUBLIC okvis::TensorRt PRIVATE CUDA::cublas)
   target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_SUPERPOINT)
 endif()
 add_library(okvis::Frontend ALIAS ${LIB_NAME})

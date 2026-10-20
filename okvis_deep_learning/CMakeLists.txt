@@ -21,30 +21,12 @@ if(USE_NN)
             src/DepthFusionProcessor.cpp)
 endif()
 
-# TensorRT stereo depth backend (no libtorch needed)
+# TensorRT stereo depth backend (no libtorch needed); the engine wrapper is okvis::TensorRt
 if(USE_TENSORRT)
-    find_package(CUDAToolkit REQUIRED)
-    find_path(TENSORRT_INCLUDE_DIR NvInfer.h
-        HINTS ${TENSORRT_ROOT} $ENV{TENSORRT_ROOT}
-        PATH_SUFFIXES include include/x86_64-linux-gnu include/aarch64-linux-gnu)
-    # plain libnvinfer.so comes with libnvinfer-dev; fall back to the versioned runtime library
-    find_library(TENSORRT_LIBRARY
-        NAMES nvinfer libnvinfer.so.10
-        HINTS ${TENSORRT_ROOT} $ENV{TENSORRT_ROOT}
-        PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu lib/aarch64-linux-gnu)
-    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY)
-        message(FATAL_ERROR "USE_TENSORRT: TensorRT not found (NvInfer.h: ${TENSORRT_INCLUDE_DIR}, "
-            "nvinfer: ${TENSORRT_LIBRARY}). Install libnvinfer-dev matching the installed runtime, "
-            "or set TENSORRT_ROOT.")
-    endif()
-    message(STATUS "TensorRT: ${TENSORRT_INCLUDE_DIR}, ${TENSORRT_LIBRARY}")
     target_sources(${LIB_NAME}
         PRIVATE
-            src/TensorRtEngine.cpp
             src/TensorRtStereo2DepthProcessor.cpp)
-    target_include_directories(${LIB_NAME} SYSTEM PRIVATE ${TENSORRT_INCLUDE_DIR})
-    target_link_libraries(${LIB_NAME} ${TENSORRT_LIBRARY} CUDA::cudart)
-    target_compile_definitions(${LIB_NAME} PUBLIC OKVIS_USE_TENSORRT)
+    target_link_libraries(${LIB_NAME} okvis::TensorRt)
 endif()
 
 target_include_directories(${LIB_NAME}
