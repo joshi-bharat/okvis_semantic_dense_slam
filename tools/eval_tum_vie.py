@@ -122,6 +122,7 @@ def evaluate(name, t_est, p_est, R_est, t_gt, p_gt_all, R_gt_all, out_dir, plot)
     print(f"   estimated rotation offset: {np.degrees(offset.magnitude()):.2f} deg")
 
     e_drift = None
+    Rs, ts = R1, t1  # start-segment alignment; the full one if there is only one segment
     if len(segs) >= 2:
         a0, b0 = segs[0]
         sl = slice(a0, b0 + 1)
@@ -144,14 +145,21 @@ def evaluate(name, t_est, p_est, R_est, t_gt, p_gt_all, R_gt_all, out_dir, plot)
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(1, 2, figsize=(14, 6))
-        p_all = (p_est + R_est.apply(b)) @ R1.T + t1
+        # Aligned on the first mocap segment, so both start together and drift shows as divergence
+        # later; the full alignment, which spreads the error over the whole run, is drawn faintly.
+        p_start = (p_est + R_est.apply(b)) @ Rs.T + ts
+        p_full = (p_est + R_est.apply(b)) @ R1.T + t1
         gt_ok = np.r_[True, np.diff(t_gt) < MAX_GT_GAP]
         pg_plot = p_gt_all.copy()
         pg_plot[~gt_ok] = np.nan
         ax[0].plot(pg_plot[:, 0], pg_plot[:, 1], "k-", lw=2, label="mocap")
-        ax[0].plot(p_all[:, 0], p_all[:, 1], "-", color="tab:blue", lw=1, label="OKVIS2 (aligned)")
-        ax[0].plot(p_all[0, 0], p_all[0, 1], "go", label="start")
-        ax[0].plot(p_all[-1, 0], p_all[-1, 1], "rs", label="end")
+        start_label = "OKVIS2 (start-aligned)" if e_drift is not None else "OKVIS2 (aligned)"
+        ax[0].plot(p_start[:, 0], p_start[:, 1], "-", color="tab:blue", lw=1, label=start_label)
+        if e_drift is not None:
+            ax[0].plot(p_full[:, 0], p_full[:, 1], "--", color="tab:orange", lw=0.8, alpha=0.6,
+                       label="OKVIS2 (full alignment)")
+        ax[0].plot(p_start[0, 0], p_start[0, 1], "go", label="start")
+        ax[0].plot(p_start[-1, 0], p_start[-1, 1], "rs", label="end")
         ax[0].set_aspect("equal")
         ax[0].set_xlabel("x [m]")
         ax[0].set_ylabel("y [m]")
