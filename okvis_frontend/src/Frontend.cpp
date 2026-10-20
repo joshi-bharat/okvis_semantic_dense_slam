@@ -250,7 +250,9 @@ bool Frontend::detectAndDescribe(size_t cameraIndex, std::shared_ptr<okvis::Mult
                                                 superPointKeypoints, superPointDescriptors);
     frameOut->resetKeypoints(cameraIndex, superPointKeypoints);
     frameOut->resetDescriptors(cameraIndex, superPointDescriptors);
-    return !superPointKeypoints.empty();
+    // as for BRISK: matching and triangulation read the back-projected rays
+    frameOut->computeBackProjections(cameraIndex);
+    return true;
   }
 
   // hack: also initialise those maps for camera-aware extraction
