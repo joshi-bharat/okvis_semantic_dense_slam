@@ -38,7 +38,8 @@ public:
   /**
    * @brief Construct from a serialised TensorRT engine.
    * @param parameters Threshold, NMS radius, engine path.
-   * @param maxKeypoints Keypoint budget, i.e. frontend_parameters/max_num_keypoints.
+   * @param maxKeypoints Keypoint budget, i.e. frontend_parameters/max_num_keypoints. With an engine
+   *        that has built-in top-k it caps what survives the second NMS.
    */
   SuperPointExtractor(const SuperPointParameters & parameters, int maxKeypoints);
 

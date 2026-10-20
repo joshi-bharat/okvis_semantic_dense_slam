@@ -163,6 +163,7 @@ void SuperPointExtractor::extract(const cv::Mat & image, std::vector<cv::KeyPoin
     sparseInference_(normalised, engineKeypoints, engineScores, engineDescriptors);
     inferenceTimer.stop();
     TimerSwitchable nmsTimer("1.2 SuperPoint NMS and descriptors");
+    // The engine's top-k caps detections; max_num_keypoints can cap the survivors further.
     selectSparseSuperPoint(engineKeypoints, engineScores, engineDescriptors,
                            float(parameters_.threshold), parameters_.nms_radius, maxKeypoints_,
                            keypoints, descriptors);

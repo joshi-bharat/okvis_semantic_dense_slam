@@ -92,23 +92,6 @@ TEST(SuperPointParameters, keepsAbsoluteEnginePathUnchanged) {
   EXPECT_EQ(parameters.superpoint.engine, "/opt/models/superpoint.engine");
 }
 
-TEST(SuperPointParameters, readsItsOwnKeypointBudget) {
-  const std::string file =
-      writeConfig("budget.yaml", "    superpoint_max_num_keypoints: 1000\n");
-  okvis::ViParametersReader reader(file);
-  okvis::ViParameters parameters;
-  reader.getParameters(parameters);
-  EXPECT_EQ(parameters.superpoint.max_num_keypoints, 1000);
-}
-
-TEST(SuperPointParameters, keypointBudgetDefaultsToSharedOne) {
-  const std::string file = writeConfig("shared-budget.yaml", "");
-  okvis::ViParametersReader reader(file);
-  okvis::ViParameters parameters;
-  reader.getParameters(parameters);
-  EXPECT_EQ(parameters.superpoint.max_num_keypoints, 0); // 0: use max_num_keypoints
-}
-
 // image_size resizes every camera; the uhumans2 cameras are 720x480 with f = 415.69, c = (360, 240).
 TEST(ImageResize, scalesIntrinsicsToTheNewImageSize) {
   const std::string file =
