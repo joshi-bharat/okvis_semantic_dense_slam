@@ -66,6 +66,10 @@ struct CameraParameters{
   /// \brief Image timestamp error. [s] timestamp_camera_correct = timestamp_camera - image_delay.
   double image_delay;
 
+  /// \brief Resize every camera image to this [width, height] before processing; intrinsics are
+  ///        scaled to match. Zero: keep the calibrated size. The aspect ratio must be preserved.
+  Eigen::Vector2i image_size = Eigen::Vector2i::Zero();
+
   /**
    * @brief Some parameters to set the online calibrator.
    */

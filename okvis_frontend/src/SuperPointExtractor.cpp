@@ -15,6 +15,7 @@
 #include <okvis/SuperPointDescriptors.hpp>
 #include <okvis/SuperPointNms.hpp>
 #include <okvis/TensorRtEngine.hpp>
+#include <okvis/timing/Timer.hpp>
 
 namespace okvis {
 
@@ -119,11 +120,15 @@ void SuperPointExtractor::extract(const cv::Mat & image, std::vector<cv::KeyPoin
 
   cv::Mat scores;
   cv::Mat coarse;
+  TimerSwitchable inferenceTimer("1.1 SuperPoint inference");
   inference_(normalised, scores, coarse);
+  inferenceTimer.stop();
 
+  TimerSwitchable nmsTimer("1.2 SuperPoint NMS and descriptors");
   keypoints = superPointNms(scores, float(parameters_.threshold), parameters_.nms_radius,
                             maxKeypoints_);
   descriptors = sampleSuperPointDescriptors(coarse, keypoints, scores.size());
+  nmsTimer.stop();
 
   // Back to image coordinates. Sampling happened in score-map space, so this must come after.
   const float scaleX = float(grey.cols) / float(scores.cols);

@@ -204,10 +204,19 @@ bool ThreadedSlam::addImages(const okvis::Time & stamp,
   for(const auto & image : images) {
     if(parameters_.nCameraSystem.isCameraConfigured(image.first) && 
        parameters_.nCameraSystem.cameraType(image.first).isUsed) {
+      cv::Mat & grey = frames.at(image.first).measurement.image;
       if(image.second.channels()==1) {
-        frames.at(image.first).measurement.image = image.second;
+        grey = image.second;
       } else {
-        cv::cvtColor(image.second, frames.at(image.first).measurement.image, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(image.second, grey, cv::COLOR_BGR2GRAY);
+      }
+      // camera_parameters/image_size: the intrinsics were scaled to this size already
+      const cv::Size imageSize(parameters_.camera.image_size[0], parameters_.camera.image_size[1]);
+      if(!imageSize.empty() && grey.size() != imageSize) {
+        cv::Mat resized;
+        cv::resize(grey, resized, imageSize, 0, 0,
+                   imageSize.area() < grey.size().area() ? cv::INTER_AREA : cv::INTER_LINEAR);
+        grey = resized;
       }
       frames.at(image.first).timeStamp = stampCorrected;
       frames.at(image.first).sensorId = image.first;
@@ -218,7 +227,14 @@ bool ThreadedSlam::addImages(const okvis::Time & stamp,
 
   for(const auto & depthImage : depthImages) {
     if(parameters_.nCameraSystem.cameraType(depthImage.first).isUsed) {
-      frames.at(depthImage.first).measurement.depthImage = depthImage.second;
+      const cv::Size imageSize(parameters_.camera.image_size[0], parameters_.camera.image_size[1]);
+      if(!imageSize.empty() && depthImage.second.size() != imageSize) {
+        // nearest neighbour: interpolating depth across edges invents surfaces
+        cv::resize(depthImage.second, frames.at(depthImage.first).measurement.depthImage,
+                   imageSize, 0, 0, cv::INTER_NEAREST);
+      } else {
+        frames.at(depthImage.first).measurement.depthImage = depthImage.second;
+      }
       frames.at(depthImage.first).timeStamp = stampCorrected;
       frames.at(depthImage.first).sensorId = depthImage.first;
       frames.at(depthImage.first).measurement.deliversKeypoints = false;

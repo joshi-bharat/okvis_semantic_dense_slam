@@ -11,6 +11,10 @@
 
 #include <gtest/gtest.h>
 #include <okvis/ViParametersReader.hpp>
+#include <okvis/cameras/PinholeCamera.hpp>
+#include <okvis/cameras/EquidistantDistortion.hpp>
+#include <okvis/cameras/RadialTangentialDistortion.hpp>
+#include <stdexcept>
 
 namespace {
 
@@ -22,7 +26,8 @@ namespace {
  * stub is not enough. Writing into a temporary directory also lets us check that a relative
  * engine path resolves against the config's own directory rather than the repository's.
  */
-std::string writeConfig(const std::string & name, const std::string & extraFrontendLines) {
+std::string writeConfig(const std::string & name, const std::string & extraFrontendLines,
+                        const std::string & anchor = "frontend_parameters:") {
   const std::filesystem::path base =
       std::filesystem::path(OKVIS_TEST_CONFIG_DIR) / "uhumans2" / "okvis2.yaml";
   std::ifstream in(base);
@@ -32,9 +37,8 @@ std::string writeConfig(const std::string & name, const std::string & extraFront
   std::string text = buffer.str();
 
   if (!extraFrontendLines.empty()) {
-    const std::string anchor = "frontend_parameters:";
     const size_t anchorPosition = text.find(anchor);
-    EXPECT_NE(anchorPosition, std::string::npos) << "no frontend_parameters in " << base;
+    EXPECT_NE(anchorPosition, std::string::npos) << "no " << anchor << " in " << base;
     const size_t endOfLine = text.find('\n', anchorPosition);
     text.insert(endOfLine + 1, extraFrontendLines);
   }
@@ -103,4 +107,45 @@ TEST(SuperPointParameters, keypointBudgetDefaultsToSharedOne) {
   okvis::ViParameters parameters;
   reader.getParameters(parameters);
   EXPECT_EQ(parameters.superpoint.max_num_keypoints, 0); // 0: use max_num_keypoints
+}
+
+// image_size resizes every camera; the uhumans2 cameras are 720x480 with f = 415.69, c = (360, 240).
+TEST(ImageResize, scalesIntrinsicsToTheNewImageSize) {
+  const std::string file =
+      writeConfig("resize.yaml", "    image_size: [360, 240]\n", "camera_parameters:");
+  okvis::ViParametersReader reader(file);
+  okvis::ViParameters parameters;
+  reader.getParameters(parameters);
+  EXPECT_EQ(parameters.camera.image_size[0], 360);
+  EXPECT_EQ(parameters.camera.image_size[1], 240);
+  for (size_t i = 0; i < parameters.nCameraSystem.numCameras(); ++i) {
+    const auto geometry = parameters.nCameraSystem.cameraGeometry(i);
+    EXPECT_EQ(geometry->imageWidth(), 360u);
+    EXPECT_EQ(geometry->imageHeight(), 240u);
+    Eigen::VectorXd intrinsics;
+    geometry->getIntrinsics(intrinsics);
+    EXPECT_NEAR(intrinsics[0], 415.69219381653056 * 0.5, 1e-9); // fu
+    EXPECT_NEAR(intrinsics[1], 415.69219381653056 * 0.5, 1e-9); // fv
+    // Pixel centres at x + 0.5, as cv::resize uses: (360 + 0.5) * 0.5 - 0.5.
+    EXPECT_NEAR(intrinsics[2], 179.75, 1e-9); // cu
+    EXPECT_NEAR(intrinsics[3], 119.75, 1e-9); // cv
+  }
+}
+
+TEST(ImageResize, keepsIntrinsicsWithoutImageSize) {
+  const std::string file = writeConfig("noresize.yaml", "");
+  okvis::ViParametersReader reader(file);
+  okvis::ViParameters parameters;
+  reader.getParameters(parameters);
+  EXPECT_EQ(parameters.camera.image_size[0], 0);
+  Eigen::VectorXd intrinsics;
+  parameters.nCameraSystem.cameraGeometry(0)->getIntrinsics(intrinsics);
+  EXPECT_NEAR(intrinsics[0], 415.69219381653056, 1e-9);
+  EXPECT_NEAR(intrinsics[2], 360.0, 1e-9);
+}
+
+TEST(ImageResize, rejectsAChangedAspectRatio) {
+  const std::string file =
+      writeConfig("badresize.yaml", "    image_size: [360, 360]\n", "camera_parameters:");
+  EXPECT_THROW(okvis::ViParametersReader reader(file), std::invalid_argument);
 }

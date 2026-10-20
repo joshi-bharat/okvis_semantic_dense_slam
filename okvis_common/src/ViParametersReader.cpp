@@ -19,6 +19,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <sstream>
+#include <stdexcept>
 
 #include <glog/logging.h>
 
@@ -61,6 +63,20 @@ void ViParametersReader::readConfigFile(const std::string& filename) {
   std::vector<CameraCalibration,Eigen::aligned_allocator<CameraCalibration>> calibrations;
   if(!getCameraCalibration(calibrations, file)) {
     LOG(FATAL) << "Did not find any calibration!";
+  }
+
+  // Optional resize of all images: scale the calibrations before anything is derived from them
+  // (rectification maps, camera geometries).
+  cv::FileNode imageSizeNode = file["camera_parameters"]["image_size"];
+  if (imageSizeNode.isSeq()) {
+    if (imageSizeNode.size() != 2 || int(imageSizeNode[0]) <= 0 || int(imageSizeNode[1]) <= 0) {
+      throw std::invalid_argument("camera_parameters/image_size must be [width, height] > 0");
+    }
+    const Eigen::Vector2i imageSize{int(imageSizeNode[0]), int(imageSizeNode[1])};
+    for (size_t i = 0; i < calibrations.size(); ++i) {
+      scaleCalibration(calibrations[i], imageSize, i);
+    }
+    viParameters_.camera.image_size = imageSize;
   }
 
   // Count the number of cameras for mapping and rectification to decide
@@ -518,6 +534,27 @@ bool ViParametersReader::getCameraCalibration(
 }
 
 // Get the camera calibration via the configuration file.
+void ViParametersReader::scaleCalibration(CameraCalibration & calibration,
+                                          const Eigen::Vector2i & imageSize, size_t cameraIndex) {
+  const Eigen::Vector2i & original = calibration.imageDimension;
+  if (int64_t(imageSize[0]) * original[1] != int64_t(imageSize[1]) * original[0]) {
+    std::stringstream message;
+    message << "camera_parameters/image_size [" << imageSize[0] << ", " << imageSize[1]
+            << "] does not preserve the aspect ratio of camera " << cameraIndex << " ["
+            << original[0] << ", " << original[1] << "]";
+    throw std::invalid_argument(message.str());
+  }
+  const double scale = double(imageSize[0]) / double(original[0]);
+  // Pixel centres sit at x + 0.5, as cv::resize assumes; focal lengths scale plainly. Distortion
+  // coefficients act on normalised coordinates, so they do not change.
+  calibration.focalLength *= scale;
+  calibration.principalPoint =
+      (calibration.principalPoint.array() + 0.5) * scale - 0.5;
+  LOG(INFO) << "Camera " << cameraIndex << " resized from " << original[0] << "x" << original[1]
+            << " to " << imageSize[0] << "x" << imageSize[1] << " (scale " << scale << ")";
+  calibration.imageDimension = imageSize;
+}
+
 bool ViParametersReader::getCalibrationViaConfig(
     std::vector<CameraCalibration,Eigen::aligned_allocator<CameraCalibration>> & calibrations,
     cv::FileNode cameraNode) const {

@@ -93,6 +93,16 @@ class ViParametersReader{
     cameras::NCameraSystem::CameraType cameraType; ///< Some additional info about the camera.
   };
 
+  /**
+   * @brief Scale a calibration to a resized image.
+   * @param calibration Calibration to scale in place.
+   * @param imageSize New [width, height].
+   * @param cameraIndex Camera index, for the error message.
+   * @throws std::invalid_argument If imageSize does not preserve the aspect ratio.
+   */
+  static void scaleCalibration(CameraCalibration & calibration, const Eigen::Vector2i & imageSize,
+                               size_t cameraIndex);
+
   /// \brief Parse yaml file entry.
   /// @param[in] file The yaml file node.
   /// @param[in] name The variable name to be read.

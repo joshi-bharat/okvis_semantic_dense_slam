@@ -224,6 +224,7 @@ void Frontend::setSuperPointParameters(const SuperPointParameters & parameters,
 
 cv::Mat Frontend::superPointDistances(const cv::Mat & query, const cv::Mat & train) const {
   cv::Mat similarities;
+  TimerSwitchable gemmTimer("2.00 SuperPoint descriptor GEMM");
   {
     std::lock_guard<std::mutex> lock(cublasMatcherMutex_);
     similarities = cublasMatcher_->score(query, train);
